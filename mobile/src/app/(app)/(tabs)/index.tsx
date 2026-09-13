@@ -2,16 +2,24 @@ import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet } from 'react-native';
 
+import { CategorySpendChart } from '@/components/charts/category-spend-chart';
+import { IncomeSpendChart } from '@/components/charts/income-spend-chart';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { RefreshButton } from '@/components/ui/refresh-button';
 import { Spacing } from '@/constants/theme';
+import { useChartColors } from '@/hooks/use-theme';
 import { formatMoney } from '@/lib/format';
 import { calculateSafeToSpend } from '@/lib/safe-to-spend';
 import { useAuth } from '@/lib/auth-context';
 
 import { useAccounts } from '@/features/accounts/api';
-import { useAllLoanSchedules, useLatestAccountBalances } from '@/features/dashboard/api';
+import {
+  useAccountFlows,
+  useAllLoanSchedules,
+  useCategorySpend,
+  useLatestAccountBalances,
+} from '@/features/dashboard/api';
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -29,6 +37,9 @@ export default function DashboardScreen() {
     refetch: refetchBalances,
   } = useLatestAccountBalances();
   const { data: loanSchedules, refetch: refetchLoanSchedules } = useAllLoanSchedules();
+  const { data: accountFlows, refetch: refetchAccountFlows } = useAccountFlows();
+  const { data: categorySpend, refetch: refetchCategorySpend } = useCategorySpend();
+  const chart = useChartColors();
 
   const isLoading = accountsLoading || balancesLoading;
   const isRefreshing = accountsFetching || balancesFetching;
@@ -37,6 +48,8 @@ export default function DashboardScreen() {
     refetchAccounts();
     refetchBalances();
     refetchLoanSchedules();
+    refetchAccountFlows();
+    refetchCategorySpend();
   }
 
   const netPosition = useMemo(() => {
@@ -166,6 +179,25 @@ export default function DashboardScreen() {
         );
       })}
 
+      <ThemedView style={styles.sectionHeaderRow}>
+        <ThemedText type="smallBold">Cash flow by account</ThemedText>
+        <ThemedView style={{ flexDirection: 'row', gap: Spacing.three }}>
+          <LegendDot color={chart.income} label="Income" />
+          <LegendDot color={chart.spend} label="Spend" />
+        </ThemedView>
+      </ThemedView>
+      {accounts.map((account) => (
+        <IncomeSpendChart
+          key={account.id}
+          title={account.nickname}
+          income={accountFlows?.[account.id]?.income ?? 0}
+          spend={accountFlows?.[account.id]?.spend ?? 0}
+        />
+      ))}
+
+      <ThemedText type="smallBold">Spending by category</ThemedText>
+      <CategorySpendChart categories={categorySpend ?? []} />
+
       <Pressable onPress={signOut} style={styles.signOutButton}>
         <ThemedText type="small" themeColor="textSecondary">
           Sign out
@@ -175,10 +207,22 @@ export default function DashboardScreen() {
   );
 }
 
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <ThemedView style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }} />
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+    </ThemedView>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   heroCard: { borderRadius: Spacing.four, padding: Spacing.four, gap: Spacing.one },
   netPositionValue: { fontSize: 36, lineHeight: 40 },
   safeToSpendRow: {

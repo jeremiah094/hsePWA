@@ -63,6 +63,85 @@ export function useLatestAccountBalances() {
   });
 }
 
+export interface AccountFlow {
+  accountId: string;
+  income: number;
+  spend: number;
+}
+
+/** Lifetime income (credits) vs spend (debits) per account, from parsed transactions. */
+export function useAccountFlows() {
+  const { user } = useAuth();
+  const { data: accounts } = useAccounts();
+  const accountIds = (accounts ?? []).map((a) => a.id);
+
+  return useQuery({
+    queryKey: ['dashboard-account-flows', accountIds],
+    enabled: !!user && accountIds.length > 0,
+    queryFn: async (): Promise<Record<string, AccountFlow>> => {
+      const { data, error } = await supabase
+        .from('bank_recon_transactions')
+        .select('account_id, amount, direction')
+        .in('account_id', accountIds);
+      if (error) throw error;
+
+      const result: Record<string, AccountFlow> = {};
+      for (const t of data ?? []) {
+        const flow = result[t.account_id] ?? (result[t.account_id] = { accountId: t.account_id, income: 0, spend: 0 });
+        if (t.direction === 'credit') flow.income += Number(t.amount);
+        else flow.spend += Number(t.amount);
+      }
+      return result;
+    },
+  });
+}
+
+export interface CategorySpend {
+  categoryId: string | null;
+  name: string;
+  amount: number;
+}
+
+/** Lifetime spend (debits) grouped by category, across all of the user's accounts. */
+export function useCategorySpend() {
+  const { user } = useAuth();
+  const { data: accounts } = useAccounts();
+  const accountIds = (accounts ?? []).map((a) => a.id);
+
+  return useQuery({
+    queryKey: ['dashboard-category-spend', accountIds],
+    enabled: !!user && accountIds.length > 0,
+    queryFn: async (): Promise<CategorySpend[]> => {
+      const { data: transactions, error } = await supabase
+        .from('bank_recon_transactions')
+        .select('category_id, amount')
+        .in('account_id', accountIds)
+        .eq('direction', 'debit');
+      if (error) throw error;
+
+      const { data: categories, error: categoriesError } = await supabase
+        .from('bank_recon_categories')
+        .select('id, name');
+      if (categoriesError) throw categoriesError;
+      const nameById = new Map((categories ?? []).map((c) => [c.id, c.name]));
+
+      const totals = new Map<string, number>();
+      for (const t of transactions ?? []) {
+        const key = t.category_id ?? 'uncategorized';
+        totals.set(key, (totals.get(key) ?? 0) + Number(t.amount));
+      }
+
+      return Array.from(totals.entries())
+        .map(([key, amount]) => ({
+          categoryId: key === 'uncategorized' ? null : key,
+          name: key === 'uncategorized' ? 'Uncategorized' : nameById.get(key) ?? 'Uncategorized',
+          amount,
+        }))
+        .sort((a, b) => b.amount - a.amount);
+    },
+  });
+}
+
 export function useAllLoanSchedules() {
   const { user } = useAuth();
   const { data: accounts } = useAccounts();
