@@ -272,62 +272,71 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
   // text is a small fraction of this.
   const truncated = text.length > 60000 ? text.slice(0, 60000) : text;
 
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text:
-                  'You extract structured data from raw bank statement text (pulled from a PDF or spreadsheet export, so spacing and line breaks may be imperfect). ' +
-                  'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
-                  'If a running balance column is present but there is no explicit "opening"/"closing balance" label, infer opening_balance and closing_balance from it: opening_balance is the balance immediately before the first transaction, closing_balance is the balance immediately after the last one. ' +
-                  'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately — even if the source shows amounts already signed (e.g. negative for debits), still report the magnitude and put the actual direction in the direction field. ' +
-                  'Skip headers, footers, page numbers, and any non-transaction lines. ' +
-                  'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
-              },
-            ],
-          },
-          contents: [{ role: 'user', parts: [{ text: truncated }] }],
-          generationConfig: {
-            temperature: 0,
-            maxOutputTokens: 8192,
-            responseMimeType: 'application/json',
-            responseSchema: {
+  const requestBody = JSON.stringify({
+    systemInstruction: {
+      parts: [
+        {
+          text:
+            'You extract structured data from raw bank statement text (pulled from a PDF or spreadsheet export, so spacing and line breaks may be imperfect). ' +
+            'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
+            'If a running balance column is present but there is no explicit "opening"/"closing balance" label, infer opening_balance and closing_balance from it: opening_balance is the balance immediately before the first transaction, closing_balance is the balance immediately after the last one. ' +
+            'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately — even if the source shows amounts already signed (e.g. negative for debits), still report the magnitude and put the actual direction in the direction field. ' +
+            'Skip headers, footers, page numbers, and any non-transaction lines. ' +
+            'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
+        },
+      ],
+    },
+    contents: [{ role: 'user', parts: [{ text: truncated }] }],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string' },
+          opening_balance: { type: 'number' },
+          closing_balance: { type: 'number' },
+          transactions: {
+            type: 'array',
+            items: {
               type: 'object',
               properties: {
-                summary: { type: 'string' },
-                opening_balance: { type: 'number' },
-                closing_balance: { type: 'number' },
-                transactions: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      date: { type: 'string', description: 'ISO 8601, YYYY-MM-DD' },
-                      description: { type: 'string' },
-                      amount: { type: 'number', description: 'positive magnitude' },
-                      direction: { type: 'string', enum: ['debit', 'credit'] },
-                      balance: { type: 'number', description: 'running balance after this line, if shown' },
-                    },
-                    required: ['date', 'description', 'amount', 'direction'],
-                  },
-                },
+                date: { type: 'string', description: 'ISO 8601, YYYY-MM-DD' },
+                description: { type: 'string' },
+                amount: { type: 'number', description: 'positive magnitude' },
+                direction: { type: 'string', enum: ['debit', 'credit'] },
+                balance: { type: 'number', description: 'running balance after this line, if shown' },
               },
-              required: ['summary', 'transactions'],
+              required: ['date', 'description', 'amount', 'direction'],
             },
           },
-        }),
+        },
+        required: ['summary', 'transactions'],
       },
-    );
+    },
+  });
 
-    if (!response.ok) {
-      console.error('Gemini API error', response.status, await response.text());
-      return null;
+  try {
+    let response: Response;
+    const maxAttempts = 3;
+    for (let attempt = 1; ; attempt++) {
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        body: requestBody,
+      });
+      if (response.ok) break;
+
+      // The free tier hits 503 (model overloaded) and 429 (rate limited)
+      // under load, and a short retry usually clears them — anything else
+      // (bad key, bad request) won't be fixed by retrying.
+      const isTransient = response.status === 503 || response.status === 429;
+      if (!isTransient || attempt >= maxAttempts) {
+        console.error('Gemini API error', response.status, await response.text());
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 750));
     }
 
     const data = await response.json();
