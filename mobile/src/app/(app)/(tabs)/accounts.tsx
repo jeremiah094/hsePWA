@@ -1,12 +1,14 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Collapsible } from '@/components/ui/collapsible';
+import { RefreshButton } from '@/components/ui/refresh-button';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { confirmAsync } from '@/lib/confirm';
 import { formatMoney } from '@/lib/format';
 
 import type { Account, AccountWithBank, Bank } from '@/features/accounts/api';
@@ -54,51 +56,30 @@ export default function AccountsScreen() {
 
   const isLoading = banksLoading || accountsLoading;
 
-  function confirmArchive(account: Account) {
-    Alert.alert(
+  async function confirmArchive(account: Account) {
+    const ok = await confirmAsync(
       account.archived_at ? 'Unarchive account?' : 'Archive account?',
       account.archived_at
         ? 'This account will reappear in your active views.'
         : 'This hides it from active views. Its statements and transactions are kept for historical reconciliation.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: account.archived_at ? 'Unarchive' : 'Archive',
-          style: account.archived_at ? 'default' : 'destructive',
-          onPress: () => archiveAccount.mutate({ id: account.id, archived: !account.archived_at }),
-        },
-      ],
     );
+    if (ok) archiveAccount.mutate({ id: account.id, archived: !account.archived_at });
   }
 
-  function confirmDeleteAccount(account: Account) {
-    Alert.alert(
+  async function confirmDeleteAccount(account: Account) {
+    const ok = await confirmAsync(
       'Delete this account permanently?',
       'This removes the account and all of its statements and transactions. This cannot be undone. Consider archiving instead.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete permanently',
-          style: 'destructive',
-          onPress: () => deleteAccount.mutate(account.id),
-        },
-      ],
     );
+    if (ok) deleteAccount.mutate(account.id);
   }
 
-  function confirmDeleteBank(bank: Bank) {
-    Alert.alert(
+  async function confirmDeleteBank(bank: Bank) {
+    const ok = await confirmAsync(
       `Delete ${bank.name}?`,
       'This deletes the bank and every account, statement, and transaction under it. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete permanently',
-          style: 'destructive',
-          onPress: () => deleteBank.mutate(bank.id),
-        },
-      ],
     );
+    if (ok) deleteBank.mutate(bank.id);
   }
 
   return (
@@ -114,6 +95,17 @@ export default function AccountsScreen() {
             }}
           />
         }>
+        <ThemedView style={styles.headerRow}>
+          <ThemedText type="subtitle">Accounts</ThemedText>
+          <RefreshButton
+            refreshing={isLoading}
+            onRefresh={() => {
+              refetchBanks();
+              refetchAccounts();
+            }}
+          />
+        </ThemedView>
+
         {!isLoading && (banks?.length ?? 0) === 0 && (
           <ThemedView type="backgroundElement" style={styles.emptyState}>
             <ThemedText type="smallBold">No banks yet</ThemedText>
@@ -222,6 +214,7 @@ export default function AccountsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollContent: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   emptyState: { padding: Spacing.four, borderRadius: Spacing.three, gap: Spacing.one },
   bankSection: { borderRadius: Spacing.three, padding: Spacing.three, gap: Spacing.two },
   bankHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

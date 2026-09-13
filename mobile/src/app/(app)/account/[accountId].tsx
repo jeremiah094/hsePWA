@@ -1,11 +1,13 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { RefreshButton } from '@/components/ui/refresh-button';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { confirmAsync } from '@/lib/confirm';
 import { formatDate, formatMoney } from '@/lib/format';
 
 import {
@@ -53,37 +55,22 @@ export default function AccountDetailScreen() {
     );
   }
 
-  function confirmDelete() {
-    Alert.alert(
+  async function confirmDelete() {
+    const ok = await confirmAsync(
       'Delete this account permanently?',
       'This removes the account and all of its statements and transactions. This cannot be undone. Consider archiving instead.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete permanently',
-          style: 'destructive',
-          onPress: async () => {
-            await deleteAccount.mutateAsync(accountId);
-            router.back();
-          },
-        },
-      ],
     );
+    if (!ok) return;
+    await deleteAccount.mutateAsync(accountId);
+    router.back();
   }
 
-  function confirmDeleteStatement(statement: Statement) {
-    Alert.alert(
+  async function confirmDeleteStatement(statement: Statement) {
+    const ok = await confirmAsync(
       'Remove this statement?',
       'This deletes the uploaded PDF and all of its parsed transactions. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => deleteStatement.mutate({ statementId: statement.id, filePath: statement.file_path }),
-        },
-      ],
     );
+    if (ok) deleteStatement.mutate({ statementId: statement.id, filePath: statement.file_path });
   }
 
   return (
@@ -99,7 +86,16 @@ export default function AccountDetailScreen() {
         />
       }>
       <ThemedView type="backgroundElement" style={styles.headerCard}>
-        <ThemedText type="subtitle">{account.nickname}</ThemedText>
+        <ThemedView style={styles.headerRow}>
+          <ThemedText type="subtitle">{account.nickname}</ThemedText>
+          <RefreshButton
+            refreshing={accountFetching || statementsFetching}
+            onRefresh={() => {
+              refetchAccount();
+              refetchStatements();
+            }}
+          />
+        </ThemedView>
         <ThemedText type="small" themeColor="textSecondary">
           {account.bank.name} · {account.account_type}
           {account.is_joint ? ' · Joint' : ''}
@@ -257,6 +253,7 @@ const styles = StyleSheet.create({
   container: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   headerCard: { borderRadius: Spacing.three, padding: Spacing.three, gap: 4 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   statementRow: {
     flexDirection: 'row',

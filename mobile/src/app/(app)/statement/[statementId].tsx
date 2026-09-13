@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet } fr
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { RefreshButton } from '@/components/ui/refresh-button';
 import { Spacing } from '@/constants/theme';
 import { formatDate, formatMoney } from '@/lib/format';
 
@@ -58,8 +59,20 @@ export default function StatementReviewScreen() {
     );
   }
 
+  const isRefreshing = statementFetching || balancesFetching || transactionsFetching;
+  function handleRefresh() {
+    refetchStatement();
+    refetchBalances();
+    refetchTransactions();
+  }
+
   return (
     <ThemedView style={styles.container}>
+      <ThemedView style={styles.headerRow}>
+        <ThemedText type="subtitle">Statement</ThemedText>
+        <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
+      </ThemedView>
+
       {accountBalance && (
         <ThemedView
           type="backgroundElement"
@@ -90,16 +103,7 @@ export default function StatementReviewScreen() {
         data={transactions ?? []}
         keyExtractor={(t) => t.id}
         contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={statementFetching || balancesFetching || transactionsFetching}
-            onRefresh={() => {
-              refetchStatement();
-              refetchBalances();
-              refetchTransactions();
-            }}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
         renderItem={({ item }) => {
           const tone = confidenceTone(item.classification_confidence);
           const accepted = item.classification_status !== 'auto';
@@ -162,6 +166,13 @@ export default function StatementReviewScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three,
+  },
   reconciliationCard: {
     margin: Spacing.three,
     marginBottom: 0,

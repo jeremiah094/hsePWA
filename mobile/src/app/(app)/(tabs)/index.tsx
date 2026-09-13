@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet } 
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { RefreshButton } from '@/components/ui/refresh-button';
 import { Spacing } from '@/constants/theme';
 import { formatMoney } from '@/lib/format';
 import { calculateSafeToSpend } from '@/lib/safe-to-spend';
@@ -73,6 +74,7 @@ export default function DashboardScreen() {
       <ScrollView
         contentContainerStyle={styles.centerFill}
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}>
+        <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
         <ThemedText type="smallBold">No accounts yet</ThemedText>
         <ThemedText type="small" themeColor="textSecondary" style={{ marginTop: 4, marginBottom: Spacing.three }}>
           Add a bank and an account to get started.
@@ -88,6 +90,10 @@ export default function DashboardScreen() {
     <ScrollView
       contentContainerStyle={styles.container}
       refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}>
+      <ThemedView style={styles.headerRow}>
+        <ThemedText type="subtitle">Dashboard</ThemedText>
+        <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
+      </ThemedView>
       <ThemedView type="backgroundElement" style={styles.heroCard}>
         <ThemedText type="small" themeColor="textSecondary">
           Net position
@@ -172,6 +178,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   centerFill: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   heroCard: { borderRadius: Spacing.four, padding: Spacing.four, gap: Spacing.one },
   netPositionValue: { fontSize: 36, lineHeight: 40 },
   safeToSpendRow: {
