@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -15,11 +15,28 @@ import { useAllLoanSchedules, useLatestAccountBalances } from '@/features/dashbo
 export default function DashboardScreen() {
   const router = useRouter();
   const { signOut } = useAuth();
-  const { data: accounts, isLoading: accountsLoading } = useAccounts();
-  const { data: balances, isLoading: balancesLoading } = useLatestAccountBalances();
-  const { data: loanSchedules } = useAllLoanSchedules();
+  const {
+    data: accounts,
+    isLoading: accountsLoading,
+    isFetching: accountsFetching,
+    refetch: refetchAccounts,
+  } = useAccounts();
+  const {
+    data: balances,
+    isLoading: balancesLoading,
+    isFetching: balancesFetching,
+    refetch: refetchBalances,
+  } = useLatestAccountBalances();
+  const { data: loanSchedules, refetch: refetchLoanSchedules } = useAllLoanSchedules();
 
   const isLoading = accountsLoading || balancesLoading;
+  const isRefreshing = accountsFetching || balancesFetching;
+
+  function handleRefresh() {
+    refetchAccounts();
+    refetchBalances();
+    refetchLoanSchedules();
+  }
 
   const netPosition = useMemo(() => {
     if (!accounts || !balances) return 0;
@@ -53,7 +70,9 @@ export default function DashboardScreen() {
 
   if (!accounts || accounts.length === 0) {
     return (
-      <ThemedView style={styles.centerFill}>
+      <ScrollView
+        contentContainerStyle={styles.centerFill}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}>
         <ThemedText type="smallBold">No accounts yet</ThemedText>
         <ThemedText type="small" themeColor="textSecondary" style={{ marginTop: 4, marginBottom: Spacing.three }}>
           Add a bank and an account to get started.
@@ -61,12 +80,14 @@ export default function DashboardScreen() {
         <Pressable onPress={() => router.push('/(app)/(tabs)/accounts')}>
           <ThemedText type="linkPrimary">Go to Accounts</ThemedText>
         </Pressable>
-      </ThemedView>
+      </ScrollView>
     );
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}>
       <ThemedView type="backgroundElement" style={styles.heroCard}>
         <ThemedText type="small" themeColor="textSecondary">
           Net position

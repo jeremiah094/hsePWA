@@ -10,7 +10,13 @@ import { useTheme } from '@/hooks/use-theme';
 import { formatMoney } from '@/lib/format';
 
 import type { Account, AccountWithBank, Bank } from '@/features/accounts/api';
-import { useAccounts, useArchiveAccount, useBanks } from '@/features/accounts/api';
+import {
+  useAccounts,
+  useArchiveAccount,
+  useBanks,
+  useDeleteAccountPermanently,
+  useDeleteBank,
+} from '@/features/accounts/api';
 import { AccountFormModal } from '@/features/accounts/account-form-modal';
 import { BankFormModal } from '@/features/accounts/bank-form-modal';
 
@@ -27,6 +33,8 @@ export default function AccountsScreen() {
   const { data: banks, isLoading: banksLoading, refetch: refetchBanks } = useBanks();
   const { data: accounts, isLoading: accountsLoading, refetch: refetchAccounts } = useAccounts();
   const archiveAccount = useArchiveAccount();
+  const deleteAccount = useDeleteAccountPermanently();
+  const deleteBank = useDeleteBank();
 
   const [bankModalVisible, setBankModalVisible] = useState(false);
   const [accountModalState, setAccountModalState] = useState<{
@@ -63,6 +71,36 @@ export default function AccountsScreen() {
     );
   }
 
+  function confirmDeleteAccount(account: Account) {
+    Alert.alert(
+      'Delete this account permanently?',
+      'This removes the account and all of its statements and transactions. This cannot be undone. Consider archiving instead.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete permanently',
+          style: 'destructive',
+          onPress: () => deleteAccount.mutate(account.id),
+        },
+      ],
+    );
+  }
+
+  function confirmDeleteBank(bank: Bank) {
+    Alert.alert(
+      `Delete ${bank.name}?`,
+      'This deletes the bank and every account, statement, and transaction under it. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete permanently',
+          style: 'destructive',
+          onPress: () => deleteBank.mutate(bank.id),
+        },
+      ],
+    );
+  }
+
   return (
     <ThemedView style={styles.container}>
       <ScrollView
@@ -91,9 +129,16 @@ export default function AccountsScreen() {
             <ThemedView key={bank.id} type="backgroundElement" style={styles.bankSection}>
               <ThemedView style={styles.bankHeaderRow}>
                 <ThemedText type="smallBold">{bank.name}</ThemedText>
-                <Pressable onPress={() => setAccountModalState({ bank, editingAccount: null })}>
-                  <ThemedText type="linkPrimary">+ Add account</ThemedText>
-                </Pressable>
+                <ThemedView style={{ flexDirection: 'row', gap: Spacing.three }}>
+                  <Pressable onPress={() => setAccountModalState({ bank, editingAccount: null })}>
+                    <ThemedText type="linkPrimary">+ Add account</ThemedText>
+                  </Pressable>
+                  <Pressable onPress={() => confirmDeleteBank(bank)}>
+                    <ThemedText type="link" themeColor="textSecondary">
+                      Delete bank
+                    </ThemedText>
+                  </Pressable>
+                </ThemedView>
               </ThemedView>
 
               {bankAccounts.length === 0 && (
@@ -142,6 +187,11 @@ export default function AccountsScreen() {
                     <Pressable onPress={() => confirmArchive(account)}>
                       <ThemedText type="link" themeColor="textSecondary">
                         {account.archived_at ? 'Unarchive' : 'Archive'}
+                      </ThemedText>
+                    </Pressable>
+                    <Pressable onPress={() => confirmDeleteAccount(account)}>
+                      <ThemedText type="link" themeColor="textSecondary">
+                        Delete
                       </ThemedText>
                     </Pressable>
                   </ThemedView>

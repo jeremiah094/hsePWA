@@ -48,6 +48,24 @@ export function useCreateBank() {
   });
 }
 
+// Deletes the bank and, via cascade, every account/pocket/statement/
+// transaction/loan schedule under it. There's no "archive" for banks —
+// archive the accounts individually if you want to keep their history.
+export function useDeleteBank() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('bank_recon_banks').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['banks'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-balances'] });
+    },
+  });
+}
+
 // ---- Accounts (with bank + pockets joined) ----
 
 export function useAccounts(options?: { includeArchived?: boolean }) {

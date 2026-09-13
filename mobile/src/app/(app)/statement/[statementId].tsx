@@ -1,6 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -30,9 +30,14 @@ function confidenceTone(confidence: number | null): { label: string; color: stri
 
 export default function StatementReviewScreen() {
   const { statementId } = useLocalSearchParams<{ statementId: string }>();
-  const { data: statement } = useStatement(statementId);
-  const { data: balances } = useStatementBalances(statementId);
-  const { data: transactions, isLoading } = useTransactions(statementId);
+  const { data: statement, isFetching: statementFetching, refetch: refetchStatement } = useStatement(statementId);
+  const { data: balances, isFetching: balancesFetching, refetch: refetchBalances } = useStatementBalances(statementId);
+  const {
+    data: transactions,
+    isLoading,
+    isFetching: transactionsFetching,
+    refetch: refetchTransactions,
+  } = useTransactions(statementId);
   const { data: categories } = useCategories();
   const confirmTransaction = useConfirmTransaction();
   const bulkConfirm = useBulkConfirmHighConfidence();
@@ -85,6 +90,16 @@ export default function StatementReviewScreen() {
         data={transactions ?? []}
         keyExtractor={(t) => t.id}
         contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={statementFetching || balancesFetching || transactionsFetching}
+            onRefresh={() => {
+              refetchStatement();
+              refetchBalances();
+              refetchTransactions();
+            }}
+          />
+        }
         renderItem={({ item }) => {
           const tone = confidenceTone(item.classification_confidence);
           const accepted = item.classification_status !== 'auto';

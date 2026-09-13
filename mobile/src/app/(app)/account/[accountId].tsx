@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -29,8 +29,18 @@ export default function AccountDetailScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const { data: account, isLoading: accountLoading } = useAccount(accountId);
-  const { data: statements, isLoading: statementsLoading } = useStatements(accountId);
+  const {
+    data: account,
+    isLoading: accountLoading,
+    isFetching: accountFetching,
+    refetch: refetchAccount,
+  } = useAccount(accountId);
+  const {
+    data: statements,
+    isLoading: statementsLoading,
+    isFetching: statementsFetching,
+    refetch: refetchStatements,
+  } = useStatements(accountId);
   const uploadStatement = useUploadStatement(accountId);
   const deleteAccount = useDeleteAccountPermanently();
   const deleteStatement = useDeleteStatement();
@@ -77,7 +87,17 @@ export default function AccountDetailScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={accountFetching || statementsFetching}
+          onRefresh={() => {
+            refetchAccount();
+            refetchStatements();
+          }}
+        />
+      }>
       <ThemedView type="backgroundElement" style={styles.headerCard}>
         <ThemedText type="subtitle">{account.nickname}</ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
