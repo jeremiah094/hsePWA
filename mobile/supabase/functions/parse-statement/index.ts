@@ -1,14 +1,14 @@
 // Bank statement parser.
 //
 // Extracts real text from the uploaded PDF (via unpdf/pdf.js), then turns it
-// into transaction line items — via Claude when ANTHROPIC_API_KEY is
-// configured (it reads the raw text, writes a short summary, and extracts
-// every line item, which handles the huge variety of real bank layouts far
-// better than hand-written patterns), falling back to a regex-based parser
-// otherwise or if the AI call fails. Either path feeds the same
-// classification and balance-reconciliation logic below, so line items are
-// always cross-checked against the statement's own opening/closing balance
-// regardless of how they were extracted.
+// into transaction line items — via Gemini when GEMINI_API_KEY is configured
+// (it reads the raw text, writes a short summary, and extracts every line
+// item, which handles the huge variety of real bank layouts far better than
+// hand-written patterns), falling back to a regex-based parser otherwise or
+// if the AI call fails. Either path feeds the same classification and
+// balance-reconciliation logic below, so line items are always cross-checked
+// against the statement's own opening/closing balance regardless of how they
+// were extracted.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { extractText, getDocumentProxy } from 'npm:unpdf@1.8.1';
@@ -199,7 +199,7 @@ function parseStatementText(text: string): ParsedStatement {
   return { rows, detectedOpening, detectedClosing };
 }
 
-// --- AI extraction (Claude) ---------------------------------------------
+// --- AI extraction (Gemini) ----------------------------------------------
 
 interface AiExtraction {
   summary: string;
@@ -208,12 +208,14 @@ interface AiExtraction {
   detectedClosing: number | null;
 }
 
-// Uses Claude to read the statement text directly and extract line items —
+const GEMINI_MODEL = 'gemini-flash-latest'; // Google's rolling alias for its current free-tier Flash model.
+
+// Uses Gemini to read the statement text directly and extract line items —
 // far more tolerant of real-world bank layouts than the regex parser below.
 // Returns null (never throws) whenever AI extraction isn't usable, so the
 // caller can fall back to the regex parser without special-casing failures.
 async function extractWithAI(text: string): Promise<AiExtraction | null> {
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
   if (!apiKey) return null;
 
   // Caps cost/latency on outlier statements; a normal monthly statement's
@@ -221,29 +223,30 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
   const truncated = text.length > 60000 ? text.slice(0, 60000) : text;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 8192,
-        temperature: 0,
-        system:
-          'You extract structured data from raw bank statement text (pulled from a PDF, so spacing and line breaks may be imperfect). ' +
-          'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
-          'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately. ' +
-          'Skip headers, footers, page numbers, and any non-transaction lines. ' +
-          'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
-        messages: [{ role: 'user', content: truncated }],
-        tools: [
-          {
-            name: 'record_statement',
-            description: 'Records the transactions extracted from a bank statement, and a short summary.',
-            input_schema: {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [
+              {
+                text:
+                  'You extract structured data from raw bank statement text (pulled from a PDF, so spacing and line breaks may be imperfect). ' +
+                  'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
+                  'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately. ' +
+                  'Skip headers, footers, page numbers, and any non-transaction lines. ' +
+                  'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
+              },
+            ],
+          },
+          contents: [{ role: 'user', parts: [{ text: truncated }] }],
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 8192,
+            responseMimeType: 'application/json',
+            responseSchema: {
               type: 'object',
               properties: {
                 summary: { type: 'string' },
@@ -267,32 +270,37 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
               required: ['summary', 'transactions'],
             },
           },
-        ],
-        tool_choice: { type: 'tool', name: 'record_statement' },
-      }),
-    });
+        }),
+      },
+    );
 
     if (!response.ok) {
-      console.error('Anthropic API error', response.status, await response.text());
+      console.error('Gemini API error', response.status, await response.text());
       return null;
     }
 
     const data = await response.json();
 
-    // A generation cut off by the token cap may carry incomplete/invalid
-    // tool input — safer to fall back to the regex parser than risk silently
-    // missing line items.
-    if (data.stop_reason === 'max_tokens') {
-      console.error('Anthropic response truncated at max_tokens; falling back to regex parser');
+    if (data.promptFeedback?.blockReason) {
+      console.error('Gemini blocked the request', data.promptFeedback.blockReason);
       return null;
     }
 
-    const toolUse = (data.content ?? []).find(
-      (block: { type: string; name?: string }) => block.type === 'tool_use' && block.name === 'record_statement',
-    );
-    if (!toolUse) return null;
+    const candidate = data.candidates?.[0];
+    if (!candidate) return null;
 
-    const input = toolUse.input as {
+    // A generation cut off by the token cap carries incomplete/invalid JSON —
+    // safer to fall back to the regex parser than risk silently missing
+    // line items.
+    if (candidate.finishReason === 'MAX_TOKENS') {
+      console.error('Gemini response truncated at MAX_TOKENS; falling back to regex parser');
+      return null;
+    }
+
+    const jsonText = candidate.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('');
+    if (!jsonText) return null;
+
+    const input = JSON.parse(jsonText) as {
       summary?: string;
       opening_balance?: number;
       closing_balance?: number;
