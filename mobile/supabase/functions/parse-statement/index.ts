@@ -258,7 +258,11 @@ interface AiExtraction {
   detectedClosing: number | null;
 }
 
-const GEMINI_MODEL = 'gemini-flash-latest'; // Google's rolling alias for its current free-tier Flash model.
+// Tried in order. The rolling "latest" alias is convenient but, being the
+// default for every free-tier caller, seems to be the first to return 503
+// "high demand" under load — a specific pinned model is a fallback that
+// isn't sharing that exact bottleneck.
+const GEMINI_MODELS = ['gemini-flash-latest', 'gemini-2.5-flash'];
 
 // Uses Gemini to read the statement text directly and extract line items —
 // far more tolerant of real-world bank layouts than the regex parser below.
@@ -318,25 +322,31 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
   });
 
   try {
-    let response: Response;
-    const maxAttempts = 3;
-    for (let attempt = 1; ; attempt++) {
-      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-        body: requestBody,
-      });
-      if (response.ok) break;
+    let response: Response | undefined;
+    const attemptsPerModel = 2;
 
-      // The free tier hits 503 (model overloaded) and 429 (rate limited)
-      // under load, and a short retry usually clears them — anything else
-      // (bad key, bad request) won't be fixed by retrying.
-      const isTransient = response.status === 503 || response.status === 429;
-      if (!isTransient || attempt >= maxAttempts) {
-        console.error('Gemini API error', response.status, await response.text());
-        return null;
+    modelLoop: for (const model of GEMINI_MODELS) {
+      for (let attempt = 1; attempt <= attemptsPerModel; attempt++) {
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+          body: requestBody,
+        });
+        if (response.ok) break modelLoop;
+
+        // 503 (model overloaded) and 429 (rate limited) are transient — a
+        // retry, or a different model, usually clears them. Anything else
+        // (bad key, bad request) will fail identically everywhere, so give
+        // up immediately instead of burning the whole retry budget on it.
+        const isTransient = response.status === 503 || response.status === 429;
+        if (!isTransient) break modelLoop;
+        if (attempt < attemptsPerModel) await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+    }
+
+    if (!response || !response.ok) {
+      console.error('Gemini API error', response?.status, response ? await response.text() : 'no response');
+      return null;
     }
 
     const data = await response.json();
