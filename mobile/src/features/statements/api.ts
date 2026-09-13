@@ -79,16 +79,20 @@ export function useStatementBalances(statementId: string | undefined) {
 const STATEMENT_MIME_TYPES = [
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-  'application/vnd.ms-excel', // .xls
+  'application/vnd.ms-excel', // .xls (also what some OSes report for .csv)
+  'text/csv',
+  'text/comma-separated-values',
+  'application/csv',
 ];
 
 const EXTENSION_CONTENT_TYPES: Record<string, string> = {
   pdf: 'application/pdf',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   xls: 'application/vnd.ms-excel',
+  csv: 'text/csv',
 };
 
-/** Picks a PDF or Excel statement, uploads it to Storage, creates the statement row, and kicks off parsing. */
+/** Picks a PDF, Excel, or CSV statement, uploads it to Storage, creates the statement row, and kicks off parsing. */
 export function useUploadStatement(accountId: string) {
   const { user } = useAuth();
   const queryClient = useQueryClient();

@@ -208,6 +208,21 @@ function isSpreadsheet(filePath: string): boolean {
   return lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv');
 }
 
+// Renders one spreadsheet cell as text. Native Excel date cells come through
+// as JS Date objects (via cellDates below) — format those as unambiguous
+// ISO, rather than letting SheetJS's own "raw:false" formatting turn them
+// into a locale-ambiguous short date (e.g. 2026-08-01 -> "8/1/26", which the
+// date parser below could then misread as day/month swapped).
+function cellToText(cell: unknown): string {
+  if (cell instanceof Date) {
+    const y = cell.getUTCFullYear();
+    const m = String(cell.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(cell.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(cell ?? '').trim();
+}
+
 // Flattens the first sheet into one line of space-separated cells per row —
 // the same shape as a PDF-extracted statement line — so it feeds straight
 // into the same AI/regex parsing below without any format-specific logic
@@ -215,17 +230,17 @@ function isSpreadsheet(filePath: string): boolean {
 // Balance, or Date/Description/Amount/Balance, etc.), so this deliberately
 // doesn't assume a fixed layout — the AI parser reads it like a table.
 function extractTextFromSpreadsheet(buffer: ArrayBuffer): string {
-  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return '';
 
   const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' });
 
   return rows
     .map((row) =>
       row
-        .map((cell) => String(cell ?? '').trim())
+        .map((cell) => cellToText(cell).trim())
         .filter(Boolean)
         .join('   '),
     )
