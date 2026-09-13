@@ -149,13 +149,29 @@ function classify(
   return { categoryId: other?.id ?? null, confidence: 0.35 };
 }
 
+// Called cross-origin from the browser (the hosted web app), so every
+// response — including the preflight — needs CORS headers or the browser
+// blocks it before it ever reaches this function.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
   const authHeader = req.headers.get('Authorization');
 
   if (!authHeader) {
-    return new Response(JSON.stringify({ error: 'Missing Authorization header' }), { status: 401 });
+    return new Response(JSON.stringify({ error: 'Missing Authorization header' }), {
+      status: 401,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   // Scoped as the calling user (their JWT is forwarded), so every query
@@ -249,7 +265,7 @@ Deno.serve(async (req: Request) => {
     if (updateError) throw updateError;
 
     return new Response(JSON.stringify({ success: true, transactionCount: rows.length }), {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -261,7 +277,7 @@ Deno.serve(async (req: Request) => {
     }
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });

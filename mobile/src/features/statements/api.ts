@@ -94,9 +94,19 @@ export function useUploadStatement(accountId: string) {
         .single();
       if (insertError) throw insertError;
 
-      // Fire-and-forget: the edge function updates the statement row as it
-      // works, and the review screen polls that row for status.
-      supabase.functions.invoke('parse-statement', { body: { statementId: statement.id } });
+      // The edge function updates the statement row as it works, and the
+      // review screen polls that row for status — but if the invoke call
+      // itself fails (network, CORS), nothing will ever update it, so mark
+      // the statement failed here rather than leaving it stuck "pending".
+      const { error: invokeError } = await supabase.functions.invoke('parse-statement', {
+        body: { statementId: statement.id },
+      });
+      if (invokeError) {
+        await supabase
+          .from('bank_recon_statements')
+          .update({ parse_status: 'failed', parse_error: invokeError.message })
+          .eq('id', statement.id);
+      }
 
       return statement;
     },
