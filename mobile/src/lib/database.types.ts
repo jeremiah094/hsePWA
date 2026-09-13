@@ -256,6 +256,7 @@ export type Database = {
       bank_recon_statements: {
         Row: {
           account_id: string
+          ai_summary: string | null
           file_path: string
           id: string
           parse_error: string | null
@@ -268,6 +269,7 @@ export type Database = {
         }
         Insert: {
           account_id: string
+          ai_summary?: string | null
           file_path: string
           id?: string
           parse_error?: string | null
@@ -280,6 +282,7 @@ export type Database = {
         }
         Update: {
           account_id?: string
+          ai_summary?: string | null
           file_path?: string
           id?: string
           parse_error?: string | null

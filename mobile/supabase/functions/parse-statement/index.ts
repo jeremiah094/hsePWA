@@ -1,17 +1,14 @@
 // Bank statement parser.
 //
-// Extracts real text from the uploaded PDF (via unpdf/pdf.js), parses it
-// into transaction line items, classifies each one against the user's
-// merchant_category_map then keyword rules, and reconciles the ledger's
-// opening/closing balance against the parsed transactions.
-//
-// Statement layouts vary enormously across banks, so this is a generic,
-// best-effort line-based parser: it looks for lines shaped like
-// "<date> <description> <amount> [<balance>]" and, where a running-balance
-// column is present, derives each transaction's direction and amount from
-// the balance delta rather than trying to guess sign conventions — that
-// self-corrects across a wide range of layouts. It will not catch every
-// bank's format; scanned/image-only PDFs (no text layer) will find nothing.
+// Extracts real text from the uploaded PDF (via unpdf/pdf.js), then turns it
+// into transaction line items — via Claude when ANTHROPIC_API_KEY is
+// configured (it reads the raw text, writes a short summary, and extracts
+// every line item, which handles the huge variety of real bank layouts far
+// better than hand-written patterns), falling back to a regex-based parser
+// otherwise or if the AI call fails. Either path feeds the same
+// classification and balance-reconciliation logic below, so line items are
+// always cross-checked against the statement's own opening/closing balance
+// regardless of how they were extracted.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { extractText, getDocumentProxy } from 'npm:unpdf@1.8.1';
@@ -202,6 +199,141 @@ function parseStatementText(text: string): ParsedStatement {
   return { rows, detectedOpening, detectedClosing };
 }
 
+// --- AI extraction (Claude) ---------------------------------------------
+
+interface AiExtraction {
+  summary: string;
+  rows: ParsedRow[];
+  detectedOpening: number | null;
+  detectedClosing: number | null;
+}
+
+// Uses Claude to read the statement text directly and extract line items —
+// far more tolerant of real-world bank layouts than the regex parser below.
+// Returns null (never throws) whenever AI extraction isn't usable, so the
+// caller can fall back to the regex parser without special-casing failures.
+async function extractWithAI(text: string): Promise<AiExtraction | null> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (!apiKey) return null;
+
+  // Caps cost/latency on outlier statements; a normal monthly statement's
+  // text is a small fraction of this.
+  const truncated = text.length > 60000 ? text.slice(0, 60000) : text;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 8192,
+        temperature: 0,
+        system:
+          'You extract structured data from raw bank statement text (pulled from a PDF, so spacing and line breaks may be imperfect). ' +
+          'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
+          'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately. ' +
+          'Skip headers, footers, page numbers, and any non-transaction lines. ' +
+          'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
+        messages: [{ role: 'user', content: truncated }],
+        tools: [
+          {
+            name: 'record_statement',
+            description: 'Records the transactions extracted from a bank statement, and a short summary.',
+            input_schema: {
+              type: 'object',
+              properties: {
+                summary: { type: 'string' },
+                opening_balance: { type: 'number' },
+                closing_balance: { type: 'number' },
+                transactions: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      date: { type: 'string', description: 'ISO 8601, YYYY-MM-DD' },
+                      description: { type: 'string' },
+                      amount: { type: 'number', description: 'positive magnitude' },
+                      direction: { type: 'string', enum: ['debit', 'credit'] },
+                      balance: { type: 'number', description: 'running balance after this line, if shown' },
+                    },
+                    required: ['date', 'description', 'amount', 'direction'],
+                  },
+                },
+              },
+              required: ['summary', 'transactions'],
+            },
+          },
+        ],
+        tool_choice: { type: 'tool', name: 'record_statement' },
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Anthropic API error', response.status, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+
+    // A generation cut off by the token cap may carry incomplete/invalid
+    // tool input — safer to fall back to the regex parser than risk silently
+    // missing line items.
+    if (data.stop_reason === 'max_tokens') {
+      console.error('Anthropic response truncated at max_tokens; falling back to regex parser');
+      return null;
+    }
+
+    const toolUse = (data.content ?? []).find(
+      (block: { type: string; name?: string }) => block.type === 'tool_use' && block.name === 'record_statement',
+    );
+    if (!toolUse) return null;
+
+    const input = toolUse.input as {
+      summary?: string;
+      opening_balance?: number;
+      closing_balance?: number;
+      transactions?: Array<{
+        date: string;
+        description: string;
+        amount: number;
+        direction: string;
+        balance?: number;
+      }>;
+    };
+
+    const rows: ParsedRow[] = [];
+    for (const t of input.transactions ?? []) {
+      const iso = parseDateToISO(t.date);
+      const description = (t.description ?? '').trim();
+      const amount = Number(t.amount);
+      if (!iso || !description || !Number.isFinite(amount) || amount <= 0) continue;
+      if (t.direction !== 'debit' && t.direction !== 'credit') continue;
+      rows.push({
+        date: iso,
+        description,
+        amount: Math.abs(amount),
+        direction: t.direction,
+        balance: Number.isFinite(t.balance) ? Number(t.balance) : undefined,
+      });
+    }
+    if (rows.length === 0) return null;
+
+    return {
+      summary: input.summary?.trim() || '',
+      rows,
+      detectedOpening: Number.isFinite(input.opening_balance) ? Number(input.opening_balance) : null,
+      detectedClosing: Number.isFinite(input.closing_balance) ? Number(input.closing_balance) : null,
+    };
+  } catch (err) {
+    console.error('AI extraction failed', err);
+    return null;
+  }
+}
+
 // --- HTTP handler -------------------------------------------------------
 
 const corsHeaders = {
@@ -256,7 +388,10 @@ Deno.serve(async (req: Request) => {
     const { text: rawText } = await extractText(pdf, { mergePages: true });
     const text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
 
-    const { rows, detectedOpening, detectedClosing } = parseStatementText(text);
+    const aiResult = await extractWithAI(text);
+    const { rows, detectedOpening, detectedClosing } = aiResult ?? parseStatementText(text);
+    const aiSummary = aiResult?.summary || null;
+    const parsedVia = aiResult ? 'ai' : 'regex';
 
     if (rows.length === 0) {
       await supabase
@@ -347,10 +482,12 @@ Deno.serve(async (req: Request) => {
         parse_status: 'parsed',
         period_start: statement.period_start ?? dates[0],
         period_end: statement.period_end ?? dates[dates.length - 1],
+        ai_summary: aiSummary,
         raw_extracted: {
           transactionCount: transactionRows.length,
           openingDetected: detectedOpening != null,
           closingDetected: detectedClosing != null,
+          parsedVia,
         },
         parse_error: null,
       })

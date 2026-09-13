@@ -1,4 +1,5 @@
 import { Tabs } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { Platform } from 'react-native';
 
 import { Colors } from '@/constants/theme';
@@ -24,8 +25,32 @@ export default function TabsLayout() {
         headerStyle: { backgroundColor: theme.background },
         headerTintColor: theme.text,
       }}>
-      <Tabs.Screen name="index" options={{ title: 'Dashboard' }} />
-      <Tabs.Screen name="accounts" options={{ title: 'Accounts' }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Dashboard',
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{ ios: 'chart.pie.fill', android: 'space_dashboard', web: 'space_dashboard' }}
+              size={24}
+              tintColor={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="accounts"
+        options={{
+          title: 'Accounts',
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{ ios: 'building.columns.fill', android: 'account_balance', web: 'account_balance' }}
+              size={24}
+              tintColor={color}
+            />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

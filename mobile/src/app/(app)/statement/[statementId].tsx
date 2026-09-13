@@ -1,4 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet } from 'react-native';
 
@@ -117,6 +118,18 @@ export default function StatementReviewScreen() {
         <ThemedText type="subtitle">Statement</ThemedText>
         <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
       </ThemedView>
+
+      {statement.ai_summary && (
+        <ThemedView type="backgroundElement" style={styles.summaryCard}>
+          <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <SymbolView name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }} size={14} tintColor="#3c87f7" />
+            <ThemedText type="smallBold">AI summary</ThemedText>
+          </ThemedView>
+          <ThemedText type="small" themeColor="textSecondary">
+            {statement.ai_summary}
+          </ThemedText>
+        </ThemedView>
+      )}
 
       {accountBalance && (
         <ThemedView
@@ -269,6 +282,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.three,
+  },
+  summaryCard: {
+    margin: Spacing.three,
+    marginBottom: 0,
+    padding: Spacing.three,
+    borderRadius: Spacing.three,
+    gap: 4,
   },
   reconciliationCard: {
     margin: Spacing.three,
