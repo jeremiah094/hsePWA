@@ -284,7 +284,8 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
                 text:
                   'You extract structured data from raw bank statement text (pulled from a PDF or spreadsheet export, so spacing and line breaks may be imperfect). ' +
                   'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
-                  'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately. ' +
+                  'If a running balance column is present but there is no explicit "opening"/"closing balance" label, infer opening_balance and closing_balance from it: opening_balance is the balance immediately before the first transaction, closing_balance is the balance immediately after the last one. ' +
+                  'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately — even if the source shows amounts already signed (e.g. negative for debits), still report the magnitude and put the actual direction in the direction field. ' +
                   'Skip headers, footers, page numbers, and any non-transaction lines. ' +
                   'Write a short 1-3 sentence plain-English summary of the statement (period covered, number of transactions, notable activity).',
               },
@@ -367,17 +368,31 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
       const iso = parseDateToISO(t.date);
       const description = (t.description ?? '').trim();
       const amount = Number(t.amount);
-      if (!iso || !description || !Number.isFinite(amount) || amount <= 0) continue;
-      if (t.direction !== 'debit' && t.direction !== 'credit') continue;
+      if (!iso || !description || !Number.isFinite(amount) || amount === 0) continue;
+
+      // We ask Gemini for a positive magnitude + separate direction field,
+      // but it doesn't always follow that (it may just echo the source
+      // file's own signed amount instead) — a negative amount is an
+      // unambiguous debit regardless of what the direction field says, so
+      // trust the sign over the stated direction rather than dropping the
+      // row outright.
+      const direction: 'debit' | 'credit' = amount < 0 ? 'debit' : t.direction === 'debit' ? 'debit' : 'credit';
+
       rows.push({
         date: iso,
         description,
         amount: Math.abs(amount),
-        direction: t.direction,
+        direction,
         balance: Number.isFinite(t.balance) ? Number(t.balance) : undefined,
       });
     }
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      console.error(
+        `Gemini proposed ${input.transactions?.length ?? 0} transactions but none passed validation`,
+        JSON.stringify(input.transactions?.slice(0, 3)),
+      );
+      return null;
+    }
 
     return {
       summary: input.summary?.trim() || '',
