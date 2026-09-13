@@ -83,6 +83,7 @@ const STATEMENT_MIME_TYPES = [
   'text/csv',
   'text/comma-separated-values',
   'application/csv',
+  'text/plain', // .txt
 ];
 
 const EXTENSION_CONTENT_TYPES: Record<string, string> = {
@@ -90,9 +91,10 @@ const EXTENSION_CONTENT_TYPES: Record<string, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   xls: 'application/vnd.ms-excel',
   csv: 'text/csv',
+  txt: 'text/plain',
 };
 
-/** Picks a PDF, Excel, or CSV statement, uploads it to Storage, creates the statement row, and kicks off parsing. */
+/** Picks a PDF, Excel, CSV, or plain-text statement, uploads it to Storage, creates the statement row, and kicks off parsing. */
 export function useUploadStatement(accountId: string) {
   const { user } = useAuth();
   const queryClient = useQueryClient();

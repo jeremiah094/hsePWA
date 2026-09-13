@@ -1,9 +1,10 @@
 // Bank statement parser.
 //
-// Extracts real text from the uploaded file — PDF via unpdf/pdf.js, or
-// Excel/CSV (.xlsx/.xls/.csv) via SheetJS, flattened to plain rows of text —
-// then turns it into transaction line items via Gemini when GEMINI_API_KEY
-// is configured (it reads the raw text, writes a short summary, and
+// Extracts real text from the uploaded file — PDF via unpdf/pdf.js, Excel/
+// CSV (.xlsx/.xls/.csv) via SheetJS flattened to plain rows of text, or a
+// plain .txt export read as-is — then turns it into transaction line items
+// via Gemini when GEMINI_API_KEY is configured (it reads the raw text,
+// writes a short summary, and
 // extracts every line item, which handles the huge variety of real bank
 // layouts far better than hand-written patterns), falling back to a
 // regex-based parser otherwise or if the AI call fails. Either path feeds
@@ -455,12 +456,13 @@ Deno.serve(async (req: Request) => {
       .download(statement.file_path);
     if (downloadError || !fileData) throw new Error('Could not download the uploaded file');
 
-    const arrayBuffer = await fileData.arrayBuffer();
     let text: string;
-    if (isSpreadsheet(statement.file_path)) {
-      text = extractTextFromSpreadsheet(arrayBuffer);
+    if (statement.file_path.toLowerCase().endsWith('.txt')) {
+      text = await fileData.text();
+    } else if (isSpreadsheet(statement.file_path)) {
+      text = extractTextFromSpreadsheet(await fileData.arrayBuffer());
     } else {
-      const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
+      const pdf = await getDocumentProxy(new Uint8Array(await fileData.arrayBuffer()));
       const { text: rawText } = await extractText(pdf, { mergePages: true });
       text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
     }
