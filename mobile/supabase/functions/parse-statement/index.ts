@@ -1,17 +1,19 @@
 // Bank statement parser.
 //
-// Extracts real text from the uploaded PDF (via unpdf/pdf.js), then turns it
-// into transaction line items — via Gemini when GEMINI_API_KEY is configured
-// (it reads the raw text, writes a short summary, and extracts every line
-// item, which handles the huge variety of real bank layouts far better than
-// hand-written patterns), falling back to a regex-based parser otherwise or
-// if the AI call fails. Either path feeds the same classification and
-// balance-reconciliation logic below, so line items are always cross-checked
-// against the statement's own opening/closing balance regardless of how they
-// were extracted.
+// Extracts real text from the uploaded file — PDF via unpdf/pdf.js, or
+// Excel/CSV (.xlsx/.xls/.csv) via SheetJS, flattened to plain rows of text —
+// then turns it into transaction line items via Gemini when GEMINI_API_KEY
+// is configured (it reads the raw text, writes a short summary, and
+// extracts every line item, which handles the huge variety of real bank
+// layouts far better than hand-written patterns), falling back to a
+// regex-based parser otherwise or if the AI call fails. Either path feeds
+// the same classification and balance-reconciliation logic below, so line
+// items are always cross-checked against the statement's own opening/
+// closing balance regardless of how they were extracted.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { extractText, getDocumentProxy } from 'npm:unpdf@1.8.1';
+import * as XLSX from 'npm:xlsx@0.18.5';
 
 interface ParseRequest {
   statementId: string;
@@ -199,6 +201,38 @@ function parseStatementText(text: string): ParsedStatement {
   return { rows, detectedOpening, detectedClosing };
 }
 
+// --- Excel/CSV -> plain text ---------------------------------------------
+
+function isSpreadsheet(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv');
+}
+
+// Flattens the first sheet into one line of space-separated cells per row —
+// the same shape as a PDF-extracted statement line — so it feeds straight
+// into the same AI/regex parsing below without any format-specific logic
+// downstream. Column layouts vary a lot (Date/Description/Debit/Credit/
+// Balance, or Date/Description/Amount/Balance, etc.), so this deliberately
+// doesn't assume a fixed layout — the AI parser reads it like a table.
+function extractTextFromSpreadsheet(buffer: ArrayBuffer): string {
+  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return '';
+
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
+
+  return rows
+    .map((row) =>
+      row
+        .map((cell) => String(cell ?? '').trim())
+        .filter(Boolean)
+        .join('   '),
+    )
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
+
 // --- AI extraction (Gemini) ----------------------------------------------
 
 interface AiExtraction {
@@ -233,7 +267,7 @@ async function extractWithAI(text: string): Promise<AiExtraction | null> {
             parts: [
               {
                 text:
-                  'You extract structured data from raw bank statement text (pulled from a PDF, so spacing and line breaks may be imperfect). ' +
+                  'You extract structured data from raw bank statement text (pulled from a PDF or spreadsheet export, so spacing and line breaks may be imperfect). ' +
                   'Identify every transaction line item, in the order they appear, plus the opening and closing balance if shown. ' +
                   'Dates must be ISO 8601 (YYYY-MM-DD). Amounts must be positive numbers (magnitude only), with direction given separately. ' +
                   'Skip headers, footers, page numbers, and any non-transaction lines. ' +
@@ -389,12 +423,17 @@ Deno.serve(async (req: Request) => {
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('bank-statements')
       .download(statement.file_path);
-    if (downloadError || !fileData) throw new Error('Could not download the uploaded PDF');
+    if (downloadError || !fileData) throw new Error('Could not download the uploaded file');
 
     const arrayBuffer = await fileData.arrayBuffer();
-    const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
-    const { text: rawText } = await extractText(pdf, { mergePages: true });
-    const text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
+    let text: string;
+    if (isSpreadsheet(statement.file_path)) {
+      text = extractTextFromSpreadsheet(arrayBuffer);
+    } else {
+      const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
+      const { text: rawText } = await extractText(pdf, { mergePages: true });
+      text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
+    }
 
     const aiResult = await extractWithAI(text);
     const { rows, detectedOpening, detectedClosing } = aiResult ?? parseStatementText(text);
@@ -407,7 +446,7 @@ Deno.serve(async (req: Request) => {
         .update({
           parse_status: 'failed',
           parse_error:
-            'Could not find recognizable transaction lines in this PDF. It may be a scanned image without a text layer, or use a layout this parser doesn’t recognize yet.',
+            'Could not find recognizable transaction lines in this file. A PDF may be a scanned image without a text layer, or the statement may use a layout this parser doesn’t recognize yet.',
           raw_extracted: { textPreview: text.slice(0, 5000) },
         })
         .eq('id', statementId);

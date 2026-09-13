@@ -76,7 +76,19 @@ export function useStatementBalances(statementId: string | undefined) {
   });
 }
 
-/** Picks a PDF, uploads it to Storage, creates the statement row, and kicks off parsing. */
+const STATEMENT_MIME_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel', // .xls
+];
+
+const EXTENSION_CONTENT_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+};
+
+/** Picks a PDF or Excel statement, uploads it to Storage, creates the statement row, and kicks off parsing. */
 export function useUploadStatement(accountId: string) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -86,21 +98,21 @@ export function useUploadStatement(accountId: string) {
       if (!user) throw new Error('Not signed in');
 
       const picked = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
+        type: STATEMENT_MIME_TYPES,
         copyToCacheDirectory: true,
       });
       if (picked.canceled || !picked.assets?.[0]) return null;
 
       const file = picked.assets[0];
       const path = `${user.id}/${accountId}/${Date.now()}-${file.name}`;
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      const contentType = file.mimeType ?? EXTENSION_CONTENT_TYPES[extension] ?? 'application/octet-stream';
 
       // fetch()-to-blob works uniformly for both a native file:// URI and a
       // web blob: URI, so the same upload path serves every platform.
       const blob = await fetch(file.uri).then((r) => r.blob());
 
-      const { error: uploadError } = await supabase.storage
-        .from('bank-statements')
-        .upload(path, blob, { contentType: 'application/pdf' });
+      const { error: uploadError } = await supabase.storage.from('bank-statements').upload(path, blob, { contentType });
       if (uploadError) throw uploadError;
 
       const { data: statement, error: insertError } = await supabase

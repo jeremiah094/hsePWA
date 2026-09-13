@@ -68,7 +68,7 @@ export default function AccountDetailScreen() {
   async function confirmDeleteStatement(statement: Statement) {
     const ok = await confirmAsync(
       'Remove this statement?',
-      'This deletes the uploaded PDF and all of its parsed transactions. This cannot be undone.',
+      'This deletes the uploaded file and all of its parsed transactions. This cannot be undone.',
     );
     if (ok) deleteStatement.mutate({ statementId: statement.id, filePath: statement.file_path });
   }
@@ -115,7 +115,7 @@ export default function AccountDetailScreen() {
           {uploadStatement.isPending ? (
             <ActivityIndicator />
           ) : (
-            <ThemedText type="linkPrimary">+ Upload PDF</ThemedText>
+            <ThemedText type="linkPrimary">+ Upload statement</ThemedText>
           )}
         </Pressable>
       </ThemedView>
