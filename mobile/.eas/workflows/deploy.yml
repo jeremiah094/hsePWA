@@ -1,0 +1,8 @@
+name: Deploy web
+
+jobs:
+  deploy_web:
+    name: Deploy web
+    type: deploy
+    params:
+      prod: true
