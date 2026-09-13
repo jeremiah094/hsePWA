@@ -14,7 +14,7 @@ import {
   useLoanSchedule,
   useUpsertLoanSchedule,
 } from '@/features/accounts/api';
-import { useStatements, useUploadStatement } from '@/features/statements/api';
+import { useDeleteStatement, useStatements, useUploadStatement } from '@/features/statements/api';
 import type { Statement } from '@/features/statements/api';
 
 const STATUS_LABEL: Record<Statement['parse_status'], string> = {
@@ -33,6 +33,7 @@ export default function AccountDetailScreen() {
   const { data: statements, isLoading: statementsLoading } = useStatements(accountId);
   const uploadStatement = useUploadStatement(accountId);
   const deleteAccount = useDeleteAccountPermanently();
+  const deleteStatement = useDeleteStatement();
 
   if (accountLoading || !account) {
     return (
@@ -55,6 +56,21 @@ export default function AccountDetailScreen() {
             await deleteAccount.mutateAsync(accountId);
             router.back();
           },
+        },
+      ],
+    );
+  }
+
+  function confirmDeleteStatement(statement: Statement) {
+    Alert.alert(
+      'Remove this statement?',
+      'This deletes the uploaded PDF and all of its parsed transactions. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => deleteStatement.mutate({ statementId: statement.id, filePath: statement.file_path }),
         },
       ],
     );
@@ -101,26 +117,32 @@ export default function AccountDetailScreen() {
       )}
 
       {statements?.map((statement) => (
-        <Pressable
-          key={statement.id}
-          onPress={() => statement.parse_status === 'parsed' && router.push(`/statement/${statement.id}`)}
-          style={[styles.statementRow, { borderColor: theme.backgroundSelected }]}>
-          <ThemedView style={{ flex: 1, gap: 2 }}>
-            <ThemedText type="default">
-              {statement.period_start && statement.period_end
-                ? `${formatDate(statement.period_start)} – ${formatDate(statement.period_end)}`
-                : new Date(statement.uploaded_at).toLocaleDateString()}
-            </ThemedText>
-            {statement.parse_status === 'failed' && statement.parse_error && (
-              <ThemedText type="small" themeColor="textSecondary">
-                {statement.parse_error}
+        <ThemedView key={statement.id} style={[styles.statementRow, { borderColor: theme.backgroundSelected }]}>
+          <Pressable
+            onPress={() => statement.parse_status === 'parsed' && router.push(`/statement/${statement.id}`)}
+            style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.two }}>
+            <ThemedView style={{ flex: 1, gap: 2 }}>
+              <ThemedText type="default">
+                {statement.period_start && statement.period_end
+                  ? `${formatDate(statement.period_start)} – ${formatDate(statement.period_end)}`
+                  : new Date(statement.uploaded_at).toLocaleDateString()}
               </ThemedText>
-            )}
-          </ThemedView>
-          <ThemedText type="small" themeColor={statement.parse_status === 'failed' ? 'text' : 'textSecondary'}>
-            {STATUS_LABEL[statement.parse_status]}
-          </ThemedText>
-        </Pressable>
+              {statement.parse_status === 'failed' && statement.parse_error && (
+                <ThemedText type="small" themeColor="textSecondary">
+                  {statement.parse_error}
+                </ThemedText>
+              )}
+            </ThemedView>
+            <ThemedText type="small" themeColor={statement.parse_status === 'failed' ? 'text' : 'textSecondary'}>
+              {STATUS_LABEL[statement.parse_status]}
+            </ThemedText>
+          </Pressable>
+          <Pressable onPress={() => confirmDeleteStatement(statement)} hitSlop={8}>
+            <ThemedText type="small" themeColor="textSecondary">
+              Remove
+            </ThemedText>
+          </Pressable>
+        </ThemedView>
       ))}
 
       <Pressable onPress={confirmDelete} style={styles.deleteButton}>

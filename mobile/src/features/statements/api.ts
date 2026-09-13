@@ -9,6 +9,22 @@ export type Statement = Tables<'bank_recon_statements'>;
 export type StatementBalance = Tables<'bank_recon_statement_balances'>;
 export type Transaction = Tables<'bank_recon_transactions'>;
 
+/** Removes an uploaded statement (and its transactions/balances, via cascade) and its stored PDF. */
+export function useDeleteStatement() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ statementId, filePath }: { statementId: string; filePath: string }) => {
+      await supabase.storage.from('bank-statements').remove([filePath]);
+      const { error } = await supabase.from('bank_recon_statements').delete().eq('id', statementId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['statements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-balances'] });
+    },
+  });
+}
+
 export function useStatements(accountId: string | undefined) {
   const { user } = useAuth();
   return useQuery({

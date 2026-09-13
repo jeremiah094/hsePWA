@@ -1,16 +1,20 @@
-// Bank statement parser — MVP mock.
+// Bank statement parser.
 //
-// Real PDF-to-transaction extraction is deferred (per the build spec, the
-// pipeline should be wired end-to-end first with a stubbed parser). This
-// function still does everything a real parser must: read the uploaded
-// statement's identity, generate line items, classify each one against the
-// user's merchant_category_map then keyword rules, reconcile the ledger's
-// opening/closing balance against the generated transactions, and write
-// everything back — so swapping in real PDF extraction later only means
-// replacing `generateMockTransactions` with real parsing, not touching any
-// of the classification/reconciliation/storage logic around it.
+// Extracts real text from the uploaded PDF (via unpdf/pdf.js), parses it
+// into transaction line items, classifies each one against the user's
+// merchant_category_map then keyword rules, and reconciles the ledger's
+// opening/closing balance against the parsed transactions.
+//
+// Statement layouts vary enormously across banks, so this is a generic,
+// best-effort line-based parser: it looks for lines shaped like
+// "<date> <description> <amount> [<balance>]" and, where a running-balance
+// column is present, derives each transaction's direction and amount from
+// the balance delta rather than trying to guess sign conventions — that
+// self-corrects across a wide range of layouts. It will not catch every
+// bank's format; scanned/image-only PDFs (no text layer) will find nothing.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { extractText, getDocumentProxy } from 'npm:unpdf@1.8.1';
 
 interface ParseRequest {
   statementId: string;
@@ -27,11 +31,12 @@ interface MerchantMapEntry {
   category_id: string;
 }
 
-interface MockTxn {
+interface ParsedRow {
   date: string; // ISO date
   description: string;
   amount: number; // positive magnitude
   direction: 'debit' | 'credit';
+  balance?: number;
 }
 
 const KEYWORD_RULES: Array<[RegExp, string]> = [
@@ -45,71 +50,8 @@ const KEYWORD_RULES: Array<[RegExp, string]> = [
   [/STEAM|PLAYSTATION|XBOX|NINTENDO/i, 'Gaming'],
   [/ELECTRIC|GAS BILL|WATER CHARGES|BROADBAND|UTILITY/i, 'Bills/Utilities'],
   [/IRISH RAIL|DUBLIN BUS|LUAS|TAXI|FUEL|PETROL/i, 'Transport'],
+  [/SALARY|PAYROLL/i, 'Bank Transfers'],
 ];
-
-const MOCK_MERCHANTS: Array<{ description: string; min: number; max: number; direction: 'debit' | 'credit' }> = [
-  { description: 'TESCO SUPERMARKET', min: 15, max: 90, direction: 'debit' },
-  { description: 'LIDL', min: 10, max: 60, direction: 'debit' },
-  { description: 'NETFLIX.COM', min: 12, max: 18, direction: 'debit' },
-  { description: 'SPOTIFY', min: 10, max: 13, direction: 'debit' },
-  { description: 'DOMINOS PIZZA', min: 15, max: 35, direction: 'debit' },
-  { description: 'MCDONALDS', min: 6, max: 18, direction: 'debit' },
-  { description: 'AMAZON.CO.UK', min: 10, max: 120, direction: 'debit' },
-  { description: 'THE LOCAL PUB', min: 10, max: 60, direction: 'debit' },
-  { description: 'STEAM GAMES', min: 5, max: 50, direction: 'debit' },
-  { description: 'ELECTRIC IRELAND', min: 40, max: 110, direction: 'debit' },
-  { description: 'IRISH RAIL', min: 5, max: 30, direction: 'debit' },
-  { description: 'STANDING ORDER TO SAVINGS', min: 50, max: 300, direction: 'debit' },
-];
-
-// Deterministic PRNG so re-parsing the same statement id is idempotent-ish.
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function seedFromString(input: string): number {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i++) hash = (hash * 33) ^ input.charCodeAt(i);
-  return hash >>> 0;
-}
-
-function generateMockTransactions(statementId: string, periodEnd: Date): MockTxn[] {
-  const rand = mulberry32(seedFromString(statementId));
-  const count = 8 + Math.floor(rand() * 6); // 8-13 spend lines
-  const txns: MockTxn[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const merchant = MOCK_MERCHANTS[Math.floor(rand() * MOCK_MERCHANTS.length)];
-    const amount = Math.round((merchant.min + rand() * (merchant.max - merchant.min)) * 100) / 100;
-    const daysAgo = Math.floor(rand() * 28);
-    const date = new Date(periodEnd);
-    date.setDate(date.getDate() - daysAgo);
-    txns.push({
-      date: date.toISOString().slice(0, 10),
-      description: merchant.description,
-      amount,
-      direction: merchant.direction,
-    });
-  }
-
-  // A salary credit, like a real current-account statement would have.
-  const salaryDate = new Date(periodEnd);
-  salaryDate.setDate(1);
-  txns.push({
-    date: salaryDate.toISOString().slice(0, 10),
-    description: 'SALARY PAYMENT ACME LTD',
-    amount: Math.round((2200 + rand() * 800) * 100) / 100,
-    direction: 'credit',
-  });
-
-  return txns.sort((a, b) => a.date.localeCompare(b.date));
-}
 
 function merchantPatternFromDescription(description: string): string {
   return description
@@ -140,7 +82,7 @@ function classify(
     }
   }
 
-  if (direction === 'credit' && /TRANSFER/i.test(description)) {
+  if (direction === 'credit' && /TRANSFER|SALARY|PAYROLL|DEPOSIT|REFUND/i.test(description)) {
     const category = categories.find((c) => c.name === 'Bank Transfers');
     if (category) return { categoryId: category.id, confidence: 0.6 };
   }
@@ -149,9 +91,119 @@ function classify(
   return { categoryId: other?.id ?? null, confidence: 0.35 };
 }
 
-// Called cross-origin from the browser (the hosted web app), so every
-// response — including the preflight — needs CORS headers or the browser
-// blocks it before it ever reaches this function.
+// --- PDF text -> transaction rows -------------------------------------
+
+const DATE_TOKEN =
+  String.raw`(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{2,4})?|\d{1,2}\s+[A-Za-z]{3,9}\.?(?:\s+\d{2,4})?)`;
+const AMOUNT_TOKEN = String.raw`[-(]?[€$£]?\d[\d,]*\.\d{2}\)?`;
+const LINE_PATTERN = new RegExp(`^(${DATE_TOKEN})\\s+(.+?)\\s+(${AMOUNT_TOKEN})(?:\\s+(${AMOUNT_TOKEN}))?$`);
+
+const NON_TRANSACTION_LINE =
+  /^(page\s+\d|statement of|sort code|account number|iban|bic|balance\s+(brought|carried)|opening balance|closing balance|previous balance|new balance|total|subtotal)/i;
+
+function toNumber(raw: string): number {
+  const trimmed = raw.trim();
+  const negative = /^\(.*\)$/.test(trimmed) || trimmed.startsWith('-');
+  const cleaned = trimmed.replace(/[^0-9.]/g, '');
+  const value = parseFloat(cleaned);
+  return negative ? -Math.abs(value) : value;
+}
+
+function parseDateToISO(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return toISO(m[1], m[2], m[3]);
+
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (m) {
+    let [, a, b, y] = m;
+    if (y.length === 2) y = (Number(y) > 50 ? '19' : '20') + y;
+    const first = Number(a);
+    const second = Number(b);
+    if (first > 12 && second <= 12) return toISO(y, b, a); // DD/MM/YYYY
+    if (second > 12 && first <= 12) return toISO(y, a, b); // MM/DD/YYYY
+    return toISO(y, a, b); // ambiguous: assume DD/MM/YYYY (bank default outside the US)
+  }
+
+  const parsed = Date.parse(s);
+  if (!Number.isNaN(parsed)) {
+    const d = new Date(parsed);
+    return toISO(String(d.getUTCFullYear()), String(d.getUTCMonth() + 1), String(d.getUTCDate()));
+  }
+
+  return null;
+}
+
+function toISO(y: string, m: string, d: string): string {
+  return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
+interface ParsedStatement {
+  rows: ParsedRow[];
+  detectedOpening: number | null;
+  detectedClosing: number | null;
+}
+
+function parseStatementText(text: string): ParsedStatement {
+  const openingMatch = text.match(
+    /(?:opening balance|balance brought forward|previous balance)\D{0,10}([-(]?[€$£]?[\d,]+\.\d{2}\)?)/i,
+  );
+  const closingMatch = text.match(
+    /(?:closing balance|balance carried forward|new balance)\D{0,10}([-(]?[€$£]?[\d,]+\.\d{2}\)?)/i,
+  );
+
+  const detectedOpening = openingMatch ? toNumber(openingMatch[1]) : null;
+  const detectedClosing = closingMatch ? toNumber(closingMatch[1]) : null;
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length > 0 && l.length < 300);
+
+  const rows: ParsedRow[] = [];
+  let runningBalance: number | null = detectedOpening;
+
+  for (const line of lines) {
+    const match = line.match(LINE_PATTERN);
+    if (!match) continue;
+
+    const [, dateRaw, descRaw, amountRaw, balanceRaw] = match;
+    const description = descRaw.trim();
+    if (description.length < 2 || NON_TRANSACTION_LINE.test(description)) continue;
+
+    const iso = parseDateToISO(dateRaw);
+    if (!iso) continue;
+
+    const balance = balanceRaw ? toNumber(balanceRaw) : undefined;
+    let amount: number;
+    let direction: 'debit' | 'credit';
+
+    if (balance != null && runningBalance != null) {
+      // Derive the transaction from the balance delta — self-correcting
+      // regardless of the statement's own sign convention for the amount column.
+      const delta = Math.round((balance - runningBalance) * 100) / 100;
+      if (delta === 0) continue;
+      amount = Math.abs(delta);
+      direction = delta >= 0 ? 'credit' : 'debit';
+      runningBalance = balance;
+    } else {
+      const raw = toNumber(amountRaw);
+      if (raw === 0) continue;
+      direction = raw < 0 ? 'debit' : 'credit';
+      amount = Math.abs(raw);
+      if (balance != null) runningBalance = balance;
+    }
+
+    rows.push({ date: iso, description, amount, direction, balance });
+  }
+
+  return { rows, detectedOpening, detectedClosing };
+}
+
+// --- HTTP handler -------------------------------------------------------
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -194,6 +246,33 @@ Deno.serve(async (req: Request) => {
       .single();
     if (statementError || !statement) throw new Error('Statement not found');
 
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from('bank-statements')
+      .download(statement.file_path);
+    if (downloadError || !fileData) throw new Error('Could not download the uploaded PDF');
+
+    const arrayBuffer = await fileData.arrayBuffer();
+    const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
+    const { text: rawText } = await extractText(pdf, { mergePages: true });
+    const text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
+
+    const { rows, detectedOpening, detectedClosing } = parseStatementText(text);
+
+    if (rows.length === 0) {
+      await supabase
+        .from('bank_recon_statements')
+        .update({
+          parse_status: 'failed',
+          parse_error:
+            'Could not find recognizable transaction lines in this PDF. It may be a scanned image without a text layer, or use a layout this parser doesn’t recognize yet.',
+          raw_extracted: { textPreview: text.slice(0, 5000) },
+        })
+        .eq('id', statementId);
+      return new Response(JSON.stringify({ success: false, transactionCount: 0 }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const { data: categories, error: categoriesError } = await supabase
       .from('bank_recon_categories')
       .select('id, name, user_id');
@@ -204,25 +283,17 @@ Deno.serve(async (req: Request) => {
       .select('merchant_pattern, category_id');
     if (mapError) throw mapError;
 
-    const periodEnd = statement.period_end ? new Date(statement.period_end) : new Date();
-    const mockTxns = generateMockTransactions(statementId, periodEnd);
-
-    const openingBalance = Math.round((500 + (seedFromString(statementId) % 2000)) * 100) / 100;
-    let runningBalance = openingBalance;
-
-    const rows = mockTxns.map((txn) => {
-      const { categoryId, confidence } = classify(txn.description, txn.direction, categories ?? [], merchantMap ?? []);
-      const signedAmount = txn.direction === 'credit' ? txn.amount : -txn.amount;
-      runningBalance += signedAmount;
+    const transactionRows = rows.map((row) => {
+      const { categoryId, confidence } = classify(row.description, row.direction, categories ?? [], merchantMap ?? []);
       return {
         user_id: statement.user_id,
         statement_id: statementId,
         account_id: statement.account_id,
         pocket_id: null,
-        date: txn.date,
-        description: txn.description,
-        amount: txn.amount,
-        direction: txn.direction,
+        date: row.date,
+        description: row.description,
+        amount: row.amount,
+        direction: row.direction,
         category_id: categoryId,
         classification_confidence: confidence,
         classification_status: 'auto' as const,
@@ -230,10 +301,28 @@ Deno.serve(async (req: Request) => {
       };
     });
 
-    const closingBalance = Math.round(runningBalance * 100) / 100;
-    const transactionsSum = Math.round((closingBalance - openingBalance) * 100) / 100;
+    const transactionsSum =
+      Math.round(rows.reduce((s, r) => s + (r.direction === 'credit' ? r.amount : -r.amount), 0) * 100) / 100;
 
-    const { error: insertTxnsError } = await supabase.from('bank_recon_transactions').insert(rows);
+    let openingBalance = detectedOpening;
+    let closingBalance = detectedClosing;
+    let isReconciled: boolean | null;
+
+    if (openingBalance != null && closingBalance != null) {
+      isReconciled = Math.abs(openingBalance + transactionsSum - closingBalance) < 0.01;
+    } else if (openingBalance != null) {
+      closingBalance = Math.round((openingBalance + transactionsSum) * 100) / 100;
+      isReconciled = null; // closing balance derived, not read from the statement — unverified
+    } else if (closingBalance != null) {
+      openingBalance = Math.round((closingBalance - transactionsSum) * 100) / 100;
+      isReconciled = null;
+    } else {
+      openingBalance = 0;
+      closingBalance = transactionsSum;
+      isReconciled = null;
+    }
+
+    const { error: insertTxnsError } = await supabase.from('bank_recon_transactions').insert(transactionRows);
     if (insertTxnsError) throw insertTxnsError;
 
     const { error: balanceError } = await supabase.from('bank_recon_statement_balances').upsert(
@@ -244,13 +333,13 @@ Deno.serve(async (req: Request) => {
         opening_balance: openingBalance,
         closing_balance: closingBalance,
         transactions_sum: transactionsSum,
-        is_reconciled: true, // by construction, since the mock derives closing from the generated rows
+        is_reconciled: isReconciled,
       },
       { onConflict: 'statement_id,pocket_id' },
     );
     if (balanceError) throw balanceError;
 
-    const dates = mockTxns.map((t) => t.date).sort();
+    const dates = rows.map((r) => r.date).sort();
 
     const { error: updateError } = await supabase
       .from('bank_recon_statements')
@@ -258,13 +347,17 @@ Deno.serve(async (req: Request) => {
         parse_status: 'parsed',
         period_start: statement.period_start ?? dates[0],
         period_end: statement.period_end ?? dates[dates.length - 1],
-        raw_extracted: { mock: true, generatedAt: new Date().toISOString(), transactionCount: rows.length },
+        raw_extracted: {
+          transactionCount: transactionRows.length,
+          openingDetected: detectedOpening != null,
+          closingDetected: detectedClosing != null,
+        },
         parse_error: null,
       })
       .eq('id', statementId);
     if (updateError) throw updateError;
 
-    return new Response(JSON.stringify({ success: true, transactionCount: rows.length }), {
+    return new Response(JSON.stringify({ success: true, transactionCount: transactionRows.length }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
