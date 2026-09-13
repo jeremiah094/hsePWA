@@ -165,6 +165,51 @@ export function useConfirmTransaction() {
   });
 }
 
+/** Rejects a transaction (e.g. an internal transfer between pockets that shouldn't be categorized as spend). */
+export function useRejectTransaction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (transactionId: string) => {
+      const { error } = await supabase
+        .from('bank_recon_transactions')
+        .update({ classification_status: 'rejected' })
+        .eq('id', transactionId);
+      if (error) throw error;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+  });
+}
+
+/** Reverts a confirmed/rejected transaction back to pending review. */
+export function useResetTransactionStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (transactionId: string) => {
+      const { error } = await supabase
+        .from('bank_recon_transactions')
+        .update({ classification_status: 'auto' })
+        .eq('id', transactionId);
+      if (error) throw error;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+  });
+}
+
+/** Moves a transaction to a different pocket (or clears it with pocketId: null). */
+export function useMoveTransactionPocket() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ transactionId, pocketId }: { transactionId: string; pocketId: string | null }) => {
+      const { error } = await supabase
+        .from('bank_recon_transactions')
+        .update({ pocket_id: pocketId })
+        .eq('id', transactionId);
+      if (error) throw error;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+  });
+}
+
 export function useBulkConfirmHighConfidence() {
   const queryClient = useQueryClient();
   return useMutation({

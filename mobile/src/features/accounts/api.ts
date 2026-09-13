@@ -185,6 +185,26 @@ export function useDeleteAccountPermanently() {
   });
 }
 
+// ---- Pockets ----
+
+export function usePockets(accountId: string | undefined) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: ['pockets', accountId],
+    enabled: !!user && !!accountId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bank_recon_pockets')
+        .select('*')
+        .eq('account_id', accountId!)
+        .is('archived_at', null)
+        .order('name');
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
 // ---- Loan schedules ----
 
 export function useLoanSchedule(accountId: string | undefined) {

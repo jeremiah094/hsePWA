@@ -399,7 +399,7 @@ export type Database = {
     }
     Enums: {
       account_type: 'current' | 'savings' | 'loan' | 'joint'
-      classification_status: 'auto' | 'confirmed' | 'corrected'
+      classification_status: 'auto' | 'confirmed' | 'corrected' | 'rejected'
       parse_status: 'pending' | 'parsed' | 'failed' | 'needs_review'
       txn_direction: 'debit' | 'credit'
     }
