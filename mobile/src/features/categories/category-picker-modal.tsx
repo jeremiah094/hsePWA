@@ -36,40 +36,42 @@ export function CategoryPickerModal({ visible, onClose, onSelect }: CategoryPick
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={close}>
       <Pressable style={styles.backdrop} onPress={close}>
-        <ThemedView type="backgroundElement" style={styles.sheet}>
-          <ThemedText type="subtitle" style={{ marginBottom: Spacing.three }}>
-            Choose a category
-          </ThemedText>
+        <Pressable onPress={(e) => e.stopPropagation()}>
+          <ThemedView type="backgroundElement" style={styles.sheet}>
+            <ThemedText type="subtitle" style={{ marginBottom: Spacing.three }}>
+              Choose a category
+            </ThemedText>
 
-          <ThemedView style={styles.newRow}>
-            <TextInput
-              value={newName}
-              onChangeText={setNewName}
-              placeholder="New category name"
-              placeholderTextColor={theme.textSecondary}
-              onSubmitEditing={addAndSelect}
-              style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-            />
-            <Pressable onPress={addAndSelect} disabled={!newName.trim() || createCategory.isPending} hitSlop={8}>
-              <ThemedText type="linkPrimary">Add</ThemedText>
-            </Pressable>
-          </ThemedView>
-
-          <FlatList
-            data={categories ?? []}
-            keyExtractor={(c) => c.id}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => {
-                  onSelect(item.id);
-                  close();
-                }}
-                style={styles.row}>
-                <ThemedText type="default">{item.name}</ThemedText>
+            <ThemedView style={styles.newRow}>
+              <TextInput
+                value={newName}
+                onChangeText={setNewName}
+                placeholder="New category name"
+                placeholderTextColor={theme.textSecondary}
+                onSubmitEditing={addAndSelect}
+                style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+              />
+              <Pressable onPress={addAndSelect} disabled={!newName.trim() || createCategory.isPending} hitSlop={8}>
+                <ThemedText type="linkPrimary">Add</ThemedText>
               </Pressable>
-            )}
-          />
-        </ThemedView>
+            </ThemedView>
+
+            <FlatList
+              data={categories ?? []}
+              keyExtractor={(c) => c.id}
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() => {
+                    onSelect(item.id);
+                    close();
+                  }}
+                  style={styles.row}>
+                  <ThemedText type="default">{item.name}</ThemedText>
+                </Pressable>
+              )}
+            />
+          </ThemedView>
+        </Pressable>
       </Pressable>
     </Modal>
   );
