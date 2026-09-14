@@ -21,7 +21,7 @@ interface Segment {
   color: string;
 }
 
-export function CategorySpendChart({ categories }: { categories: CategorySpend[] }) {
+export function CategorySpendChart({ categories, title }: { categories: CategorySpend[]; title?: string }) {
   const chart = useChartColors();
 
   const sorted = [...categories].filter((c) => c.amount > 0).sort((a, b) => b.amount - a.amount);
@@ -36,7 +36,8 @@ export function CategorySpendChart({ categories }: { categories: CategorySpend[]
 
   if (segments.length === 0 || total <= 0) {
     return (
-      <ThemedView type="backgroundElement" style={{ borderRadius: Spacing.three, padding: Spacing.three }}>
+      <ThemedView type="backgroundElement" style={{ borderRadius: Spacing.three, padding: Spacing.three, gap: Spacing.two }}>
+        {title && <ThemedText type="default">{title}</ThemedText>}
         <ThemedText type="small" themeColor="textSecondary">
           No categorized spending yet.
         </ThemedText>
@@ -63,6 +64,7 @@ export function CategorySpendChart({ categories }: { categories: CategorySpend[]
 
   return (
     <ThemedView type="backgroundElement" style={{ borderRadius: Spacing.three, padding: Spacing.three, gap: Spacing.three }}>
+      {title && <ThemedText type="default">{title}</ThemedText>}
       <Svg width="100%" height={BAR_H} viewBox={`0 0 ${VIEW_W} ${BAR_H}`}>
         {bars}
       </Svg>

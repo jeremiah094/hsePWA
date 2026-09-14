@@ -196,7 +196,9 @@ export default function DashboardScreen() {
       ))}
 
       <ThemedText type="smallBold">Spending by category</ThemedText>
-      <CategorySpendChart categories={categorySpend ?? []} />
+      {accounts.map((account) => (
+        <CategorySpendChart key={account.id} title={account.nickname} categories={categorySpend?.[account.id] ?? []} />
+      ))}
 
       <Pressable onPress={signOut} style={styles.signOutButton}>
         <ThemedText type="small" themeColor="textSecondary">

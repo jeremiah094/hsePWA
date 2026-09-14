@@ -103,7 +103,7 @@ export interface CategorySpend {
   amount: number;
 }
 
-/** Lifetime spend (debits) grouped by category, across all of the user's accounts. Rejected transactions are excluded. */
+/** Lifetime spend (debits) grouped by category, per account. Rejected transactions are excluded. */
 export function useCategorySpend() {
   const { user } = useAuth();
   const { data: accounts } = useAccounts();
@@ -112,10 +112,10 @@ export function useCategorySpend() {
   return useQuery({
     queryKey: ['dashboard-category-spend', accountIds],
     enabled: !!user && accountIds.length > 0,
-    queryFn: async (): Promise<CategorySpend[]> => {
+    queryFn: async (): Promise<Record<string, CategorySpend[]>> => {
       const { data: transactions, error } = await supabase
         .from('bank_recon_transactions')
-        .select('category_id, amount')
+        .select('account_id, category_id, amount')
         .in('account_id', accountIds)
         .eq('direction', 'debit')
         .neq('classification_status', 'rejected');
@@ -127,19 +127,25 @@ export function useCategorySpend() {
       if (categoriesError) throw categoriesError;
       const nameById = new Map((categories ?? []).map((c) => [c.id, c.name]));
 
-      const totals = new Map<string, number>();
+      const totalsByAccount = new Map<string, Map<string, number>>();
       for (const t of transactions ?? []) {
+        const totals = totalsByAccount.get(t.account_id) ?? new Map<string, number>();
+        totalsByAccount.set(t.account_id, totals);
         const key = t.category_id ?? 'uncategorized';
         totals.set(key, (totals.get(key) ?? 0) + Number(t.amount));
       }
 
-      return Array.from(totals.entries())
-        .map(([key, amount]) => ({
-          categoryId: key === 'uncategorized' ? null : key,
-          name: key === 'uncategorized' ? 'Uncategorized' : nameById.get(key) ?? 'Uncategorized',
-          amount,
-        }))
-        .sort((a, b) => b.amount - a.amount);
+      const result: Record<string, CategorySpend[]> = {};
+      for (const [accountId, totals] of totalsByAccount) {
+        result[accountId] = Array.from(totals.entries())
+          .map(([key, amount]) => ({
+            categoryId: key === 'uncategorized' ? null : key,
+            name: key === 'uncategorized' ? 'Uncategorized' : nameById.get(key) ?? 'Uncategorized',
+            amount,
+          }))
+          .sort((a, b) => b.amount - a.amount);
+      }
+      return result;
     },
   });
 }
