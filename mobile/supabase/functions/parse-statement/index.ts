@@ -224,21 +224,23 @@ function cellToText(cell: unknown): string {
   return String(cell ?? '').trim();
 }
 
-// Flattens the first sheet into one line of space-separated cells per row —
-// the same shape as a PDF-extracted statement line — so it feeds straight
-// into the same AI/regex parsing below without any format-specific logic
+function readSpreadsheetRows(buffer: ArrayBuffer): unknown[][] {
+  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return [];
+
+  const sheet = workbook.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' });
+}
+
+// Flattens the sheet into one line of space-separated cells per row — the
+// same shape as a PDF-extracted statement line — so it feeds straight into
+// the same AI/regex parsing below without any format-specific logic
 // downstream. Column layouts vary a lot (Date/Description/Debit/Credit/
 // Balance, or Date/Description/Amount/Balance, etc.), so this deliberately
 // doesn't assume a fixed layout — the AI parser reads it like a table.
-function extractTextFromSpreadsheet(buffer: ArrayBuffer): string {
-  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array', cellDates: true });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) return '';
-
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' });
-
-  return rows
+function flattenSheetRows(sheetRows: unknown[][]): string {
+  return sheetRows
     .map((row) =>
       row
         .map((cell) => cellToText(cell).trim())
@@ -247,6 +249,74 @@ function extractTextFromSpreadsheet(buffer: ArrayBuffer): string {
     )
     .filter((line) => line.length > 0)
     .join('\n');
+}
+
+// --- Revolut CSV export (a known, exact column layout) -------------------
+
+// Revolut's own export header, lowercased. Matching it lets us skip the AI/
+// regex guesswork entirely for this one very common, precisely-specified
+// format — deterministic, free, and unaffected by any AI provider's uptime.
+const REVOLUT_HEADER = [
+  'type',
+  'product',
+  'started date',
+  'completed date',
+  'description',
+  'amount',
+  'fee',
+  'currency',
+  'state',
+  'balance',
+];
+
+function tryParseRevolutCsv(sheetRows: unknown[][]): ParsedStatement | null {
+  if (sheetRows.length < 2) return null;
+  const header = sheetRows[0].map((c) => cellToText(c).toLowerCase());
+  const isRevolut = REVOLUT_HEADER.every((expected, i) => header[i] === expected);
+  if (!isRevolut) return null;
+
+  // Revolut exports interleave every sub-account ("pocket") the user has —
+  // typically a Current wallet plus one or more Savings/Vault pockets —
+  // each with its OWN independent running balance. Tag the product onto the
+  // description when there's more than one, so otherwise-identical labels
+  // like "Pocket Withdrawal" or "Transfer" don't read as duplicates; and
+  // never try to reconcile a single opening/closing balance from a Balance
+  // column that's actually several interleaved sequences.
+  const products = new Set<string>();
+  for (const row of sheetRows.slice(1)) {
+    const product = cellToText(row[1]);
+    if (product) products.add(product);
+  }
+  const tagProduct = products.size > 1;
+
+  const rows: ParsedRow[] = [];
+  for (const row of sheetRows.slice(1)) {
+    const [, product, , completedDateRaw, descriptionRaw, amountRaw, feeRaw, , state] = row;
+    if (cellToText(state).toUpperCase() !== 'COMPLETED') continue;
+
+    const iso = parseDateToISO(cellToText(completedDateRaw));
+    if (!iso) continue;
+
+    // The fee is a separate deduction on top of the amount (verified against
+    // real balance deltas: balance_after = balance_before + amount - fee),
+    // and it's also how a standalone monthly-plan charge/refund row (amount
+    // 0, fee nonzero) still nets out to a real, nonzero transaction.
+    const amount = Number(amountRaw) || 0;
+    const fee = Number(feeRaw) || 0;
+    const net = Math.round((amount - fee) * 100) / 100;
+    if (net === 0) continue;
+
+    const description = cellToText(descriptionRaw) || 'Transaction';
+    rows.push({
+      date: iso,
+      description: tagProduct && product ? `${description} (${cellToText(product)})` : description,
+      amount: Math.abs(net),
+      direction: net < 0 ? 'debit' : 'credit',
+    });
+  }
+
+  if (rows.length === 0) return null;
+  return { rows, detectedOpening: null, detectedClosing: null };
 }
 
 // --- AI extraction (Gemini) ----------------------------------------------
@@ -475,21 +545,36 @@ Deno.serve(async (req: Request) => {
       .download(statement.file_path);
     if (downloadError || !fileData) throw new Error('Could not download the uploaded file');
 
-    let text: string;
+    let text = '';
+    let dedicatedResult: ParsedStatement | null = null;
+
     if (statement.file_path.toLowerCase().endsWith('.txt')) {
       text = await fileData.text();
     } else if (isSpreadsheet(statement.file_path)) {
-      text = extractTextFromSpreadsheet(await fileData.arrayBuffer());
+      const sheetRows = readSpreadsheetRows(await fileData.arrayBuffer());
+      dedicatedResult = tryParseRevolutCsv(sheetRows);
+      if (!dedicatedResult) text = flattenSheetRows(sheetRows);
     } else {
       const pdf = await getDocumentProxy(new Uint8Array(await fileData.arrayBuffer()));
       const { text: rawText } = await extractText(pdf, { mergePages: true });
       text = Array.isArray(rawText) ? rawText.join('\n') : rawText;
     }
 
-    const aiResult = await extractWithAI(text);
-    const { rows, detectedOpening, detectedClosing } = aiResult ?? parseStatementText(text);
-    const aiSummary = aiResult?.summary || null;
-    const parsedVia = aiResult ? 'ai' : 'regex';
+    let rows: ParsedRow[];
+    let detectedOpening: number | null;
+    let detectedClosing: number | null;
+    let aiSummary: string | null = null;
+    let parsedVia: string;
+
+    if (dedicatedResult) {
+      ({ rows, detectedOpening, detectedClosing } = dedicatedResult);
+      parsedVia = 'revolut-csv';
+    } else {
+      const aiResult = await extractWithAI(text);
+      ({ rows, detectedOpening, detectedClosing } = aiResult ?? parseStatementText(text));
+      aiSummary = aiResult?.summary || null;
+      parsedVia = aiResult ? 'ai' : 'regex';
+    }
 
     if (rows.length === 0) {
       await supabase

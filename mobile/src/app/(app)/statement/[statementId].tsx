@@ -134,14 +134,16 @@ export default function StatementReviewScreen() {
       {accountBalance && (
         <ThemedView
           type="backgroundElement"
-          style={[styles.reconciliationCard, { borderColor: accountBalance.is_reconciled ? undefined : '#f85149' }]}>
+          style={[styles.reconciliationCard, { borderColor: accountBalance.is_reconciled === false ? '#f85149' : undefined }]}>
           <ThemedText type="smallBold">
             {formatMoney(Number(accountBalance.opening_balance))} → {formatMoney(Number(accountBalance.closing_balance))}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            {accountBalance.is_reconciled
+            {accountBalance.is_reconciled === true
               ? 'Reconciled — transactions match the statement balance.'
-              : 'Mismatch — transactions do not sum to the statement balance. Review before trusting this period.'}
+              : accountBalance.is_reconciled === false
+                ? 'Mismatch — transactions do not sum to the statement balance. Review before trusting this period.'
+                : 'Not verified — this statement has no single opening/closing balance to check against.'}
           </ThemedText>
         </ThemedView>
       )}
