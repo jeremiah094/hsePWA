@@ -128,6 +128,8 @@ export default function DashboardScreen() {
       <ThemedText type="smallBold">Accounts</ThemedText>
       {accounts.map((account) => {
         const balance = balances?.[account.id];
+        const flow = accountFlows?.[account.id];
+        const hasActivity = !!balance || !!(flow && (flow.income > 0 || flow.spend > 0));
         const loanSchedule = loanSchedules?.find((l) => l.account_id === account.id);
         const paidThisMonth =
           loanSchedule?.last_paid_date &&
@@ -169,9 +171,9 @@ export default function DashboardScreen() {
                 </ThemedText>
               )}
 
-              {!balance && (
+              {!hasActivity && (
                 <ThemedText type="small" themeColor="textSecondary">
-                  No parsed statements yet
+                  No statements yet
                 </ThemedText>
               )}
             </ThemedView>
