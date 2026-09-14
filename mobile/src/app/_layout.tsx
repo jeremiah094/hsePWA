@@ -3,6 +3,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme } from 'react-native';
 
+import { TransitionScreen } from '@/components/transition-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { queryClient } from '@/lib/query-client';
 
@@ -27,6 +28,13 @@ function RootNavigator() {
 
   if (!isLoading) {
     SplashScreen.hide();
+  }
+
+  // The native splash only covers startup before JS runs (and is largely a
+  // no-op on web); this branded screen covers the gap while auth resolves,
+  // so the sign-in screen never flashes before a valid session is restored.
+  if (isLoading) {
+    return <TransitionScreen />;
   }
 
   return (

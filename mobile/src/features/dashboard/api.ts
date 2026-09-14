@@ -97,6 +97,31 @@ export function useAccountFlows() {
   });
 }
 
+/** Lifetime income (credits) vs spend (debits) for a single account, from parsed transactions. Rejected transactions are excluded. */
+export function useAccountFlow(accountId: string | undefined) {
+  const { user } = useAuth();
+
+  return useQuery({
+    queryKey: ['account-flow', accountId],
+    enabled: !!user && !!accountId,
+    queryFn: async (): Promise<AccountFlow> => {
+      const { data, error } = await supabase
+        .from('bank_recon_transactions')
+        .select('amount, direction')
+        .eq('account_id', accountId!)
+        .neq('classification_status', 'rejected');
+      if (error) throw error;
+
+      const flow: AccountFlow = { accountId: accountId!, income: 0, spend: 0 };
+      for (const t of data ?? []) {
+        if (t.direction === 'credit') flow.income += Number(t.amount);
+        else flow.spend += Number(t.amount);
+      }
+      return flow;
+    },
+  });
+}
+
 export interface CategorySpend {
   categoryId: string | null;
   name: string;

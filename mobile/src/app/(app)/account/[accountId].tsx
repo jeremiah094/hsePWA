@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput } from 'react-native';
 
+import { IncomeSpendChart } from '@/components/charts/income-spend-chart';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { RefreshButton } from '@/components/ui/refresh-button';
@@ -16,6 +17,7 @@ import {
   useLoanSchedule,
   useUpsertLoanSchedule,
 } from '@/features/accounts/api';
+import { useAccountFlow } from '@/features/dashboard/api';
 import {
   useCreateManualStatement,
   useDeleteStatement,
@@ -52,6 +54,7 @@ export default function AccountDetailScreen() {
   const createManualStatement = useCreateManualStatement(accountId);
   const deleteAccount = useDeleteAccountPermanently();
   const deleteStatement = useDeleteStatement();
+  const { data: flow } = useAccountFlow(accountId);
 
   if (accountLoading || !account) {
     return (
@@ -117,6 +120,8 @@ export default function AccountDetailScreen() {
           </ThemedText>
         )}
       </ThemedView>
+
+      <IncomeSpendChart title="Received vs. spent" income={flow?.income ?? 0} spend={flow?.spend ?? 0} />
 
       {account.account_type === 'loan' && <LoanScheduleCard accountId={accountId} />}
 
