@@ -16,7 +16,12 @@ import {
   useLoanSchedule,
   useUpsertLoanSchedule,
 } from '@/features/accounts/api';
-import { useDeleteStatement, useStatements, useUploadStatement } from '@/features/statements/api';
+import {
+  useCreateManualStatement,
+  useDeleteStatement,
+  useStatements,
+  useUploadStatement,
+} from '@/features/statements/api';
 import type { Statement } from '@/features/statements/api';
 
 const STATUS_LABEL: Record<Statement['parse_status'], string> = {
@@ -44,6 +49,7 @@ export default function AccountDetailScreen() {
     refetch: refetchStatements,
   } = useStatements(accountId);
   const uploadStatement = useUploadStatement(accountId);
+  const createManualStatement = useCreateManualStatement(accountId);
   const deleteAccount = useDeleteAccountPermanently();
   const deleteStatement = useDeleteStatement();
 
@@ -71,6 +77,11 @@ export default function AccountDetailScreen() {
       'This deletes the uploaded file and all of its parsed transactions. This cannot be undone.',
     );
     if (ok) deleteStatement.mutate({ statementId: statement.id, filePath: statement.file_path });
+  }
+
+  async function addManually() {
+    const statement = await createManualStatement.mutateAsync();
+    router.push(`/statement/${statement.id}`);
   }
 
   return (
@@ -111,13 +122,22 @@ export default function AccountDetailScreen() {
 
       <ThemedView style={styles.sectionHeaderRow}>
         <ThemedText type="smallBold">Statements</ThemedText>
-        <Pressable onPress={() => uploadStatement.mutate()} disabled={uploadStatement.isPending}>
-          {uploadStatement.isPending ? (
-            <ActivityIndicator />
-          ) : (
-            <ThemedText type="linkPrimary">+ Upload statement</ThemedText>
-          )}
-        </Pressable>
+        <ThemedView style={{ flexDirection: 'row', gap: Spacing.three }}>
+          <Pressable onPress={addManually} disabled={createManualStatement.isPending}>
+            {createManualStatement.isPending ? (
+              <ActivityIndicator />
+            ) : (
+              <ThemedText type="linkPrimary">+ Add manually</ThemedText>
+            )}
+          </Pressable>
+          <Pressable onPress={() => uploadStatement.mutate()} disabled={uploadStatement.isPending}>
+            {uploadStatement.isPending ? (
+              <ActivityIndicator />
+            ) : (
+              <ThemedText type="linkPrimary">+ Upload statement</ThemedText>
+            )}
+          </Pressable>
+        </ThemedView>
       </ThemedView>
 
       {uploadStatement.isError && (

@@ -9,6 +9,71 @@ export type Statement = Tables<'bank_recon_statements'>;
 export type StatementBalance = Tables<'bank_recon_statement_balances'>;
 export type Transaction = Tables<'bank_recon_transactions'>;
 
+/** Creates an empty statement with no file — for entering transactions by hand instead of uploading. */
+export function useCreateManualStatement(accountId: string) {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!user) throw new Error('Not signed in');
+      const { data, error } = await supabase
+        .from('bank_recon_statements')
+        .insert({
+          user_id: user.id,
+          account_id: accountId,
+          file_path: `manual/${user.id}/${accountId}/${Date.now()}`,
+          parse_status: 'parsed',
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['statements', accountId] }),
+  });
+}
+
+/** Adds one hand-entered transaction to a statement (manual or uploaded). */
+export function useAddManualTransaction() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: {
+      statementId: string;
+      accountId: string;
+      date: string; // ISO yyyy-mm-dd
+      description: string;
+      amount: number; // positive magnitude
+      direction: 'debit' | 'credit';
+      categoryId: string | null;
+    }) => {
+      if (!user) throw new Error('Not signed in');
+      const { error } = await supabase.from('bank_recon_transactions').insert({
+        user_id: user.id,
+        statement_id: input.statementId,
+        account_id: input.accountId,
+        pocket_id: null,
+        date: input.date,
+        description: input.description,
+        amount: input.amount,
+        direction: input.direction,
+        category_id: input.categoryId,
+        classification_confidence: input.categoryId ? 1 : null,
+        classification_status: input.categoryId ? 'confirmed' : 'auto',
+        is_internal_transfer: false,
+      });
+      if (error) throw error;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['transactions', variables.statementId] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-account-flows'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-category-spend'] });
+    },
+  });
+}
+
 /** Removes an uploaded statement (and its transactions/balances, via cascade) and its stored PDF. */
 export function useDeleteStatement() {
   const queryClient = useQueryClient();

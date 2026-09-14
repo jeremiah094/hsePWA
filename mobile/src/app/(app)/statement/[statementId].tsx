@@ -14,6 +14,7 @@ import { usePockets } from '@/features/accounts/api';
 import { PocketPickerModal } from '@/features/accounts/pocket-picker-modal';
 import { useCategories } from '@/features/categories/api';
 import { CategoryPickerModal } from '@/features/categories/category-picker-modal';
+import { AddTransactionModal } from '@/features/statements/add-transaction-modal';
 import {
   useBulkConfirmHighConfidence,
   useConfirmTransaction,
@@ -75,6 +76,7 @@ export default function StatementReviewScreen() {
   const [pickerTransaction, setPickerTransaction] = useState<Transaction | null>(null);
   const [pocketPickerTransaction, setPocketPickerTransaction] = useState<Transaction | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [addTransactionVisible, setAddTransactionVisible] = useState(false);
 
   const categoryName = (id: string | null) => categories?.find((c) => c.id === id)?.name ?? 'Uncategorized';
   const pocketName = (id: string | null) => pockets?.find((p) => p.id === id)?.name ?? 'No pocket';
@@ -116,7 +118,12 @@ export default function StatementReviewScreen() {
     <ThemedView style={styles.container}>
       <ThemedView style={styles.headerRow}>
         <ThemedText type="subtitle">Statement</ThemedText>
-        <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
+        <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.three }}>
+          <Pressable onPress={() => setAddTransactionVisible(true)}>
+            <ThemedText type="linkPrimary">+ Add transaction</ThemedText>
+          </Pressable>
+          <RefreshButton refreshing={isRefreshing} onRefresh={handleRefresh} />
+        </ThemedView>
       </ThemedView>
 
       {statement.ai_summary && (
@@ -270,6 +277,13 @@ export default function StatementReviewScreen() {
           if (!pocketPickerTransaction) return;
           movePocket.mutate({ transactionId: pocketPickerTransaction.id, pocketId });
         }}
+      />
+
+      <AddTransactionModal
+        visible={addTransactionVisible}
+        onClose={() => setAddTransactionVisible(false)}
+        statementId={statementId}
+        accountId={statement.account_id}
       />
     </ThemedView>
   );
