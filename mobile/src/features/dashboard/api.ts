@@ -69,7 +69,7 @@ export interface AccountFlow {
   spend: number;
 }
 
-/** Lifetime income (credits) vs spend (debits) per account, from parsed transactions. */
+/** Lifetime income (credits) vs spend (debits) per account, from parsed transactions. Rejected transactions are excluded. */
 export function useAccountFlows() {
   const { user } = useAuth();
   const { data: accounts } = useAccounts();
@@ -82,7 +82,8 @@ export function useAccountFlows() {
       const { data, error } = await supabase
         .from('bank_recon_transactions')
         .select('account_id, amount, direction')
-        .in('account_id', accountIds);
+        .in('account_id', accountIds)
+        .neq('classification_status', 'rejected');
       if (error) throw error;
 
       const result: Record<string, AccountFlow> = {};
@@ -102,7 +103,7 @@ export interface CategorySpend {
   amount: number;
 }
 
-/** Lifetime spend (debits) grouped by category, across all of the user's accounts. */
+/** Lifetime spend (debits) grouped by category, across all of the user's accounts. Rejected transactions are excluded. */
 export function useCategorySpend() {
   const { user } = useAuth();
   const { data: accounts } = useAccounts();
@@ -116,7 +117,8 @@ export function useCategorySpend() {
         .from('bank_recon_transactions')
         .select('category_id, amount')
         .in('account_id', accountIds)
-        .eq('direction', 'debit');
+        .eq('direction', 'debit')
+        .neq('classification_status', 'rejected');
       if (error) throw error;
 
       const { data: categories, error: categoriesError } = await supabase
